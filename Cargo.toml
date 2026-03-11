@@ -1,0 +1,68 @@
+[package]
+name = "cloud-tools"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "cloud-tools"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+# HTTP client
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "2.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+
+# MCP server — stdio (sidecar) + streamable HTTP (service mode)
+rmcp = { version = "1.1.1", features = [
+    "server",
+    "macros",
+    "schemars",
+    "transport-io",
+    "transport-streamable-http-server",
+    "reqwest",
+] }
+
+# AWS SigV4 signing (pure Rust, no OpenSSL)
+hmac = "0.12"
+sha2 = "0.10"
+sha1 = "0.10"
+hex = "0.4"
+
+# GCP JWT RS256 (pure Rust)
+jsonwebtoken = "10.3"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# URL encoding (AWS Query API form params)
+urlencoding = "2.1"
+
+# HTTP server (for munbot integration)
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+tower = { version = "0.5", default-features = false }
+
+# XML parsing (EC2 / RDS / CloudWatch responses)
+quick-xml = "0.37"
+
+# Parallel async tasks
+futures = "0.3"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
