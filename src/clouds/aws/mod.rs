@@ -2,14 +2,17 @@ pub mod auth;
 pub mod ce;
 pub mod cloudwatch;
 pub mod cloudwatch_logs;
+pub mod compute_optimizer;
 pub mod dynamodb;
 pub mod ec2;
+pub mod ecs;
 pub mod elasticache;
 pub mod elb;
 pub mod lambda;
 pub mod nat_gateway;
 pub mod organizations;
 pub mod pricing;
+pub mod pricing_api;
 pub mod rds;
 pub mod s3;
 
