@@ -82,6 +82,7 @@ pub async fn serve(port: u16) -> anyhow::Result<()> {
         .route("/setup/aws/verify", post(setup_aws_verify))
         // AWS data (single-account or management-role service view)
         .route("/aws/costs", post(aws_costs))
+        .route("/aws/costs/compare", post(aws_costs_compare))
         .route("/aws/waste", post(aws_waste))
         // AWS org-level data (management account must have MunbotFinOpsRole deployed)
         .route("/aws/org/costs", post(aws_org_costs))
@@ -127,6 +128,13 @@ async fn aws_costs(
     Json(req): Json<AwsCostsRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
     handle!(do_aws_costs(&s.http, req).await)
+}
+
+async fn aws_costs_compare(
+    State(s): State<Arc<AppState>>,
+    Json(req): Json<AwsWasteRequest>, // same shape: role_arn + optional external_id
+) -> (StatusCode, Json<serde_json::Value>) {
+    handle!(do_aws_costs_compare(&s.http, req).await)
 }
 
 async fn aws_waste(
@@ -205,6 +213,15 @@ async fn do_aws_costs(
         .map_err(|_| anyhow::anyhow!("Invalid end_date"))?;
     let costs: Vec<CostEntry> = ce::get_costs(http, &creds, start, end).await?;
     Ok(costs_response(&req.start_date, &req.end_date, &costs))
+}
+
+async fn do_aws_costs_compare(
+    http: &reqwest::Client,
+    req: AwsWasteRequest,
+) -> anyhow::Result<serde_json::Value> {
+    let creds = assume_role(http, &req.role_arn, req.external_id.as_deref()).await?;
+    let comparison = ce::compare_costs(http, &creds).await?;
+    Ok(serde_json::to_value(comparison)?)
 }
 
 async fn do_aws_waste(

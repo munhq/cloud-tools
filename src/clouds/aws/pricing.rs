@@ -133,3 +133,39 @@ pub fn gp2_to_gp3_savings(size_gb: u64) -> f64 {
     let gp3_cost = ebs_monthly(size_gb, "gp3");
     gp2_cost - gp3_cost
 }
+
+/// Monthly cost for an EBS snapshot (per GB stored, us-east-1).
+pub fn snapshot_monthly(size_gb: u64) -> f64 {
+    size_gb as f64 * 0.05 // $0.05/GB-month for standard snapshots
+}
+
+/// Estimated monthly cost for storing an AMI (sum of its backing snapshot sizes).
+pub fn ami_snapshot_monthly(total_snapshot_gb: u64) -> f64 {
+    snapshot_monthly(total_snapshot_gb)
+}
+
+/// Estimated monthly cost for an ALB (us-east-1, base hourly charge only).
+pub fn alb_monthly() -> f64 {
+    0.0225 * HOURS_PER_MONTH // ~$16.43/month base charge
+}
+
+/// Estimated monthly cost for an NLB (us-east-1, base hourly charge only).
+pub fn nlb_monthly() -> f64 {
+    0.0225 * HOURS_PER_MONTH // ~$16.43/month base charge
+}
+
+/// Monthly LB cost based on type.
+pub fn lb_monthly(lb_type: &str) -> f64 {
+    match lb_type {
+        "application" => alb_monthly(),
+        "network" => nlb_monthly(),
+        "gateway" => 0.0125 * HOURS_PER_MONTH,
+        _ => alb_monthly(), // fallback to ALB pricing
+    }
+}
+
+/// Estimated monthly cost for CloudWatch Log storage (per GB, us-east-1).
+pub fn cloudwatch_log_storage_monthly(stored_bytes: u64) -> f64 {
+    let gb = stored_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+    gb * 0.03 // $0.03/GB-month for standard log storage
+}

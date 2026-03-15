@@ -80,8 +80,12 @@ Resources:
                   - ec2:DescribeInstanceTypes
                   - ec2:DescribeNatGateways
                   - ec2:DescribeSnapshots
+                  - ec2:DescribeImages
+                  - ec2:DescribeKeyPairs
+                  - ec2:DescribeReservedInstances
                   - cloudwatch:GetMetricStatistics
                   - cloudwatch:ListMetrics
+                  - logs:DescribeLogGroups
                   - rds:DescribeDBInstances
                   - rds:DescribeDBClusters
                   - elasticloadbalancing:DescribeLoadBalancers
@@ -89,6 +93,8 @@ Resources:
                   - elasticloadbalancing:DescribeTargetHealth
                   - s3:ListAllMyBuckets
                   - s3:GetBucketLocation
+                  - s3:GetBucketLifecycleConfiguration
+                  - s3:ListBucketMultipartUploads
                 Resource: '*'
 
   MemberRoleName:
@@ -152,12 +158,22 @@ Resources:
                   - ec2:DescribeRegions
                   - ec2:DescribeInstanceTypes
                   - ec2:DescribeNatGateways
+                  - ec2:DescribeSnapshots
+                  - ec2:DescribeImages
+                  - ec2:DescribeKeyPairs
+                  - ec2:DescribeReservedInstances
                   - cloudwatch:GetMetricStatistics
                   - cloudwatch:ListMetrics
+                  - logs:DescribeLogGroups
                   - rds:DescribeDBInstances
                   - rds:DescribeDBClusters
                   - elasticloadbalancing:DescribeLoadBalancers
+                  - elasticloadbalancing:DescribeTargetGroups
+                  - elasticloadbalancing:DescribeTargetHealth
                   - s3:ListAllMyBuckets
+                  - s3:GetBucketLocation
+                  - s3:GetBucketLifecycleConfiguration
+                  - s3:ListBucketMultipartUploads
                 Resource: '*'
 
 Outputs:
