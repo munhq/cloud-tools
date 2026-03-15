@@ -7,8 +7,10 @@ use crate::clouds::aws::{
     auth::{assume_role, AwsCreds},
     cloudwatch,
     cloudwatch_logs,
+    dynamodb,
     ec2::{self, EbsVolume},
     elb,
+    lambda,
     nat_gateway,
     organizations,
     pricing,
@@ -85,6 +87,14 @@ pub enum WasteKind {
     NoLogRetention,
     /// NAT gateway with no or near-zero traffic (< 1 GB in 14 days)
     IdleNatGateway,
+    /// Lambda function with zero invocations in 30 days — dead code / security surface
+    IdleLambda,
+    /// Lambda function with error rate > 10% — paying for failing invocations
+    HighErrorRateLambda,
+    /// DynamoDB PROVISIONED table with < 20% utilisation of provisioned capacity
+    OverprovisionedDynamoDb,
+    /// DynamoDB PROVISIONED table with no reads or writes in 14 days
+    IdleDynamoDb,
 }
 
 /// Thresholds for idle/oversized detection (validated against kosty + aws-finops-dashboard).
@@ -116,6 +126,8 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
         s3_res,
         logs_res,
         nat_gateways_res,
+        lambda_res,
+        dynamodb_res,
     ) = tokio::join!(
         ec2::list_instances(client, creds),
         ec2::list_volumes(client, creds),
@@ -129,6 +141,8 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
         s3::list_buckets_with_issues(client, creds),
         cloudwatch_logs::list_log_groups_without_retention(client, creds),
         nat_gateway::list_nat_gateways(client, creds),
+        lambda::list_functions(client, creds),
+        dynamodb::list_tables(client, creds),
     );
 
     let instances = instances_res.unwrap_or_default();
@@ -143,6 +157,8 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
     let s3_buckets = s3_res.unwrap_or_default();
     let log_groups = logs_res.unwrap_or_default();
     let nat_gateways = nat_gateways_res.unwrap_or_default();
+    let lambda_functions = lambda_res.unwrap_or_default();
+    let dynamo_tables = dynamodb_res.unwrap_or_default();
 
     let mut findings: Vec<WasteItem> = Vec::new();
 
@@ -600,6 +616,149 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
             account_id: None,
             account_name: None,
         });
+    }
+
+    // ── Lambda analysis ───────────────────────────────────────────────────────
+
+    for func in &lambda_functions {
+        let invocations = func.invocations_30d.unwrap_or(0);
+
+        if invocations == 0 {
+            findings.push(WasteItem {
+                resource_id: func.arn.clone(),
+                resource_type: "lambda_function".into(),
+                region: func.region.clone(),
+                issue: WasteKind::IdleLambda,
+                detail: format!(
+                    "Lambda '{}' ({} MB, {}) had 0 invocations in 30 days — dead code",
+                    func.name, func.memory_mb, func.runtime,
+                ),
+                estimated_monthly_usd: 0.0, // Lambda billed per invocation — 0 invocations = $0 cost
+                action: "Delete function to reduce attack surface and simplify the account. \
+                         Check for CloudWatch Events/EventBridge rules or API Gateway integrations first.".into(),
+                account_id: None,
+                account_name: None,
+            });
+            continue;
+        }
+
+        // High error rate check
+        let errors = func.errors_30d.unwrap_or(0);
+        if invocations > 0 && errors > 0 {
+            let error_rate = errors as f64 / invocations as f64;
+            if error_rate > 0.10 {
+                let wasted_cost = pricing::lambda_monthly(
+                    errors,
+                    func.avg_duration_ms.unwrap_or(100.0),
+                    func.memory_mb,
+                );
+                findings.push(WasteItem {
+                    resource_id: func.arn.clone(),
+                    resource_type: "lambda_function".into(),
+                    region: func.region.clone(),
+                    issue: WasteKind::HighErrorRateLambda,
+                    detail: format!(
+                        "Lambda '{}' error rate {:.1}% ({}/{} invocations failing in 30 days)",
+                        func.name,
+                        error_rate * 100.0,
+                        errors,
+                        invocations,
+                    ),
+                    estimated_monthly_usd: wasted_cost,
+                    action: "Investigate CloudWatch Logs for error root cause. \
+                             Fix the underlying issue — every failed invocation is billed.".into(),
+                    account_id: None,
+                    account_name: None,
+                });
+            }
+        }
+    }
+
+    // ── DynamoDB analysis ─────────────────────────────────────────────────────
+
+    for table in &dynamo_tables {
+        let full_monthly = pricing::dynamodb_provisioned_monthly(table.provisioned_rcu, table.provisioned_wcu);
+
+        // Derive average hourly consumption from CloudWatch data
+        let avg_hourly_rcu = if table.hourly_consumed_rcu.is_empty() {
+            None
+        } else {
+            Some(table.hourly_consumed_rcu.iter().sum::<f64>() / table.hourly_consumed_rcu.len() as f64)
+        };
+        let avg_hourly_wcu = if table.hourly_consumed_wcu.is_empty() {
+            None
+        } else {
+            Some(table.hourly_consumed_wcu.iter().sum::<f64>() / table.hourly_consumed_wcu.len() as f64)
+        };
+
+        // Max available per hour = provisioned × 3600 seconds
+        let max_rcu_per_hour = table.provisioned_rcu as f64 * 3600.0;
+        let max_wcu_per_hour = table.provisioned_wcu as f64 * 3600.0;
+
+        let rcu_util = avg_hourly_rcu.map(|c| if max_rcu_per_hour > 0.0 { c / max_rcu_per_hour } else { 0.0 });
+        let wcu_util = avg_hourly_wcu.map(|c| if max_wcu_per_hour > 0.0 { c / max_wcu_per_hour } else { 0.0 });
+
+        let max_util = match (rcu_util, wcu_util) {
+            (Some(r), Some(w)) => Some(f64::max(r, w)),
+            (Some(r), None) => Some(r),
+            (None, Some(w)) => Some(w),
+            (None, None) => None,
+        };
+
+        match max_util {
+            Some(u) if u < 0.01 => {
+                // Less than 1% utilisation — treat as idle
+                findings.push(WasteItem {
+                    resource_id: table.name.clone(),
+                    resource_type: "dynamodb_table".into(),
+                    region: table.region.clone(),
+                    issue: WasteKind::IdleDynamoDb,
+                    detail: format!(
+                        "DynamoDB '{}' ({} RCU / {} WCU provisioned) had {:.1}% peak utilisation over 14 days — paying for idle capacity",
+                        table.name, table.provisioned_rcu, table.provisioned_wcu,
+                        u * 100.0,
+                    ),
+                    estimated_monthly_usd: full_monthly,
+                    action: "Switch billing mode to PAY_PER_REQUEST (on-demand) — \
+                             costs $0 when idle and scales automatically. \
+                             Or delete the table if no longer needed.".into(),
+                    account_id: None,
+                    account_name: None,
+                });
+            }
+            Some(u) if u < 0.20 => {
+                // Low utilisation — oversized
+                let consumed_rcu = (avg_hourly_rcu.unwrap_or(0.0) / 3600.0) as u64;
+                let consumed_wcu = (avg_hourly_wcu.unwrap_or(0.0) / 3600.0) as u64;
+                let wasted_rcu = table.provisioned_rcu.saturating_sub(consumed_rcu);
+                let wasted_wcu = table.provisioned_wcu.saturating_sub(consumed_wcu);
+                let savings = pricing::dynamodb_provisioned_monthly(wasted_rcu, wasted_wcu);
+
+                findings.push(WasteItem {
+                    resource_id: table.name.clone(),
+                    resource_type: "dynamodb_table".into(),
+                    region: table.region.clone(),
+                    issue: WasteKind::OverprovisionedDynamoDb,
+                    detail: format!(
+                        "DynamoDB '{}' uses {:.1}% of provisioned capacity ({} RCU / {} WCU provisioned, avg ~{} RCU / {} WCU consumed/sec)",
+                        table.name, u * 100.0,
+                        table.provisioned_rcu, table.provisioned_wcu,
+                        consumed_rcu, consumed_wcu,
+                    ),
+                    estimated_monthly_usd: savings,
+                    action: format!(
+                        "Reduce provisioned capacity to ~{} RCU / {} WCU, \
+                         or switch to PAY_PER_REQUEST for variable workloads. \
+                         Enable DynamoDB Auto Scaling to handle spikes automatically.",
+                        (consumed_rcu * 2).max(1),
+                        (consumed_wcu * 2).max(1),
+                    ),
+                    account_id: None,
+                    account_name: None,
+                });
+            }
+            _ => {} // sufficient utilisation or no data — skip
+        }
     }
 
     // ── NAT Gateway analysis ──────────────────────────────────────────────────

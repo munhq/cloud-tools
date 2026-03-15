@@ -151,6 +151,219 @@ fn days_in_month(year: i32, month: u32) -> u32 {
     .num_days() as u32
 }
 
+// ── Savings Plans analysis ────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SavingsPlansReport {
+    pub period_start: NaiveDate,
+    pub period_end: NaiveDate,
+    /// Utilization of existing SP commitments (None if account has no SPs).
+    pub utilization: Option<SpUtilization>,
+    /// % of eligible on-demand spend covered by Savings Plans.
+    pub coverage_pct: Option<f64>,
+    /// On-demand spend not covered by any SP over the period.
+    pub uncovered_on_demand_usd: Option<f64>,
+    /// CE purchase recommendations — what to buy and how much you'd save.
+    pub recommendations: Vec<SpRecommendation>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SpUtilization {
+    pub total_commitment_usd: f64,
+    pub used_commitment_usd: f64,
+    pub unused_commitment_usd: f64,
+    pub utilization_pct: f64,
+    pub net_savings_usd: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SpRecommendation {
+    pub savings_plan_type: String,      // "COMPUTE_SP" | "EC2_INSTANCE_SP" | "SAGEMAKER_SP"
+    pub term: String,                   // "ONE_YEAR" | "THREE_YEAR"
+    pub payment_option: String,         // "NO_UPFRONT" | "PARTIAL_UPFRONT" | "ALL_UPFRONT"
+    pub hourly_commitment_usd: f64,
+    pub estimated_monthly_savings_usd: f64,
+    pub estimated_savings_pct: f64,
+}
+
+/// Full Savings Plans analysis: utilization of existing SPs + purchase recommendations.
+/// Should be called from the management (payer) account role.
+pub async fn get_savings_plans_report(
+    client: &reqwest::Client,
+    creds: &AwsCreds,
+    start: NaiveDate,
+    end: NaiveDate,
+) -> Result<SavingsPlansReport> {
+    let (util_res, coverage_res, rec_res) = tokio::join!(
+        fetch_sp_utilization(client, creds, start, end),
+        fetch_sp_coverage(client, creds, start, end),
+        fetch_sp_recommendations(client, creds),
+    );
+
+    let utilization = util_res.ok().flatten();
+    let (coverage_pct, uncovered) = coverage_res.ok().flatten().unzip();
+    let recommendations = rec_res.unwrap_or_default();
+
+    Ok(SavingsPlansReport {
+        period_start: start,
+        period_end: end,
+        utilization,
+        coverage_pct,
+        uncovered_on_demand_usd: uncovered,
+        recommendations,
+    })
+}
+
+async fn fetch_sp_utilization(
+    client: &reqwest::Client,
+    creds: &AwsCreds,
+    start: NaiveDate,
+    end: NaiveDate,
+) -> Result<Option<SpUtilization>> {
+    let body = serde_json::to_vec(&serde_json::json!({
+        "TimePeriod": {
+            "Start": start.format("%Y-%m-%d").to_string(),
+            "End":   end.format("%Y-%m-%d").to_string(),
+        },
+        "Granularity": "MONTHLY",
+    }))?;
+
+    let data = ce_call(client, creds, "AWSInsightsIndexService.GetSavingsPlansUtilization", &body).await?;
+    let v: serde_json::Value = serde_json::from_slice(&data)?;
+    let total = &v["Total"]["Utilization"];
+
+    let commitment: f64 = total["TotalCommitment"].as_str().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+    if commitment == 0.0 {
+        return Ok(None); // No Savings Plans in this account
+    }
+
+    Ok(Some(SpUtilization {
+        total_commitment_usd: commitment,
+        used_commitment_usd: total["UsedCommitment"].as_str().and_then(|s| s.parse().ok()).unwrap_or(0.0),
+        unused_commitment_usd: total["UnusedCommitment"].as_str().and_then(|s| s.parse().ok()).unwrap_or(0.0),
+        utilization_pct: total["UtilizationPercentage"].as_str().and_then(|s| s.parse().ok()).unwrap_or(0.0),
+        net_savings_usd: v["Total"]["Savings"]["NetSavings"].as_str().and_then(|s| s.parse().ok()).unwrap_or(0.0),
+    }))
+}
+
+/// Returns (coverage_pct, uncovered_on_demand_usd) or None if no data.
+async fn fetch_sp_coverage(
+    client: &reqwest::Client,
+    creds: &AwsCreds,
+    start: NaiveDate,
+    end: NaiveDate,
+) -> Result<Option<(f64, f64)>> {
+    let body = serde_json::to_vec(&serde_json::json!({
+        "TimePeriod": {
+            "Start": start.format("%Y-%m-%d").to_string(),
+            "End":   end.format("%Y-%m-%d").to_string(),
+        },
+        "Granularity": "MONTHLY",
+    }))?;
+
+    let data = ce_call(client, creds, "AWSInsightsIndexService.GetSavingsPlansCoverage", &body).await?;
+    let v: serde_json::Value = serde_json::from_slice(&data)?;
+    let coverage = &v["Total"]["Coverage"];
+    let pct: f64 = coverage["CoveragePercentage"].as_str().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+    let uncovered: f64 = coverage["OnDemandCost"].as_str().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+
+    if pct == 0.0 && uncovered == 0.0 {
+        return Ok(None);
+    }
+    Ok(Some((pct, uncovered)))
+}
+
+/// Fetch CE Compute Savings Plan purchase recommendations (1-year, no-upfront).
+async fn fetch_sp_recommendations(
+    client: &reqwest::Client,
+    creds: &AwsCreds,
+) -> Result<Vec<SpRecommendation>> {
+    // Query two SP types: Compute (most flexible) and EC2 Instance (cheaper but region-locked)
+    let types = [
+        ("COMPUTE_SP", "ONE_YEAR", "NO_UPFRONT"),
+        ("EC2_INSTANCE_SP", "ONE_YEAR", "NO_UPFRONT"),
+        ("COMPUTE_SP", "THREE_YEAR", "NO_UPFRONT"),
+    ];
+
+    let mut recs = Vec::new();
+    for (sp_type, term, payment) in &types {
+        let body = serde_json::to_vec(&serde_json::json!({
+            "SavingsPlansType": sp_type,
+            "TermInYears": term,
+            "PaymentOption": payment,
+            "LookbackPeriodInDays": "THIRTY_DAYS",
+            "AccountScope": "PAYER",
+        }))?;
+
+        match ce_call(client, creds, "AWSInsightsIndexService.GetSavingsPlansPurchaseRecommendation", &body).await {
+            Ok(data) => {
+                let v: serde_json::Value = serde_json::from_slice(&data).unwrap_or_default();
+                if let Some(summary) = v.get("SavingsPlansPurchaseRecommendationSummary") {
+                    let hourly: f64 = summary["EstimatedMonthlySavingsAmount"]
+                        .as_str().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+                    let savings_pct: f64 = summary["EstimatedSavingsPercentage"]
+                        .as_str().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+                    let hourly_commitment: f64 = summary["HourlyCommitmentToPurchase"]
+                        .as_str().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+
+                    if hourly > 0.0 {
+                        recs.push(SpRecommendation {
+                            savings_plan_type: sp_type.to_string(),
+                            term: term.to_string(),
+                            payment_option: payment.to_string(),
+                            hourly_commitment_usd: hourly_commitment,
+                            estimated_monthly_savings_usd: hourly,
+                            estimated_savings_pct: savings_pct,
+                        });
+                    }
+                }
+            }
+            Err(_) => {} // recommendation data unavailable (e.g. not enough history) — skip
+        }
+    }
+
+    // Sort by savings descending
+    recs.sort_by(|a, b| b.estimated_monthly_savings_usd.partial_cmp(&a.estimated_monthly_savings_usd).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(recs)
+}
+
+/// Internal helper for any CE API call.
+async fn ce_call(
+    client: &reqwest::Client,
+    creds: &AwsCreds,
+    target: &str,
+    body: &[u8],
+) -> Result<Vec<u8>> {
+    let signed = sign(
+        creds,
+        "POST",
+        CE_ENDPOINT,
+        &[("content-type", CE_CONTENT_TYPE), ("x-amz-target", target)],
+        body,
+        "ce",
+    )?;
+
+    let mut req = client
+        .post(CE_ENDPOINT)
+        .header("content-type", CE_CONTENT_TYPE)
+        .header("x-amz-target", target)
+        .header("x-amz-date", &signed.x_amz_date)
+        .header("x-amz-content-sha256", &signed.x_amz_content_sha256)
+        .header("authorization", &signed.authorization)
+        .body(body.to_vec());
+    if let Some(token) = &signed.x_amz_security_token {
+        req = req.header("x-amz-security-token", token);
+    }
+
+    let resp = req.send().await?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(anyhow!("Cost Explorer [{target}] error {status}: {text}"));
+    }
+    Ok(resp.bytes().await?.to_vec())
+}
+
 // ── Data transfer breakdown ───────────────────────────────────────────────────
 
 /// One usage-type line item from a data transfer cost breakdown.

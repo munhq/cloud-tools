@@ -57,6 +57,90 @@ pub async fn rds_cpu_stats(
     Ok(out)
 }
 
+// ── Public generic metric fetch ───────────────────────────────────────────────
+
+/// Fetch metric datapoints using any statistic (Sum / Average / Maximum / Minimum).
+///
+/// Used by modules that need non-Average stats, e.g. Lambda (Sum of Invocations),
+/// DynamoDB (Sum of ConsumedReadCapacityUnits), etc.
+pub async fn get_metric_stat(
+    client: &reqwest::Client,
+    creds: &AwsCreds,
+    region: &str,
+    namespace: &str,
+    metric_name: &str,
+    dimensions: &[(&str, &str)],
+    days: u32,
+    stat: &str,
+) -> Result<Vec<f64>> {
+    let end = Utc::now();
+    let start = end - Duration::days(days as i64);
+    let start_str = start.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let end_str = end.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+
+    let dim_names: Vec<String> = (1..=dimensions.len())
+        .map(|i| format!("Dimensions.member.{i}.Name"))
+        .collect();
+    let dim_values: Vec<String> = (1..=dimensions.len())
+        .map(|i| format!("Dimensions.member.{i}.Value"))
+        .collect();
+
+    let mut params: Vec<(&str, &str)> = vec![
+        ("Action", "GetMetricStatistics"),
+        ("Version", "2010-08-01"),
+        ("Namespace", namespace),
+        ("MetricName", metric_name),
+        ("StartTime", &start_str),
+        ("EndTime", &end_str),
+        ("Period", "3600"),
+        ("Statistics.member.1", stat),
+    ];
+    for (i, (name, value)) in dimensions.iter().enumerate() {
+        params.push((dim_names[i].as_str(), name));
+        params.push((dim_values[i].as_str(), value));
+    }
+
+    let body = form_params(&params);
+    let url = format!("https://monitoring.{region}.amazonaws.com/");
+    let creds_for_region = AwsCreds { region: region.to_string(), ..creds.clone() };
+
+    let signed = sign(
+        &creds_for_region,
+        "POST",
+        &url,
+        &[("content-type", "application/x-www-form-urlencoded")],
+        body.as_bytes(),
+        "monitoring",
+    )?;
+
+    let mut req = client
+        .post(&url)
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header("x-amz-date", &signed.x_amz_date)
+        .header("x-amz-content-sha256", &signed.x_amz_content_sha256)
+        .header("authorization", &signed.authorization)
+        .body(body);
+    if let Some(token) = &signed.x_amz_security_token {
+        req = req.header("x-amz-security-token", token);
+    }
+
+    let resp = req.send().await?;
+    let status = resp.status();
+    let text = resp.text().await?;
+    if !status.is_success() {
+        return Err(anyhow!("CloudWatch error {status} in {region}: {text}"));
+    }
+
+    let v = xml_to_value(&text)?;
+    let datapoints = as_items(&v["GetMetricStatisticsResult"]["Datapoints"]["member"]);
+    let values: Vec<f64> = datapoints
+        .iter()
+        .filter_map(|dp| dp[stat].as_str()?.parse().ok())
+        .collect();
+
+    Ok(values)
+}
+
 // ── Core metric fetch ─────────────────────────────────────────────────────────
 
 async fn get_metric(

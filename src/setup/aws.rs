@@ -55,6 +55,10 @@ Resources:
                   - ce:GetCostForecast
                   - ce:GetDimensionValues
                   - ce:GetTags
+                  - ce:GetSavingsPlansUtilization
+                  - ce:GetSavingsPlansUtilizationDetails
+                  - ce:GetSavingsPlansCoverage
+                  - ce:GetSavingsPlansPurchaseRecommendation
                 Resource: '*'
               - Sid: OrganisationsReadOnly
                 Effect: Allow
@@ -91,6 +95,9 @@ Resources:
                   - elasticloadbalancing:DescribeLoadBalancers
                   - elasticloadbalancing:DescribeTargetGroups
                   - elasticloadbalancing:DescribeTargetHealth
+                  - lambda:ListFunctions
+                  - dynamodb:ListTables
+                  - dynamodb:DescribeTable
                   - s3:ListAllMyBuckets
                   - s3:GetBucketLocation
                   - s3:GetBucketLifecycleConfiguration
@@ -170,6 +177,9 @@ Resources:
                   - elasticloadbalancing:DescribeLoadBalancers
                   - elasticloadbalancing:DescribeTargetGroups
                   - elasticloadbalancing:DescribeTargetHealth
+                  - lambda:ListFunctions
+                  - dynamodb:ListTables
+                  - dynamodb:DescribeTable
                   - s3:ListAllMyBuckets
                   - s3:GetBucketLocation
                   - s3:GetBucketLifecycleConfiguration
