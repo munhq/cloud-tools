@@ -9,6 +9,7 @@ use crate::clouds::aws::{
     cloudwatch_logs,
     ec2::{self, EbsVolume},
     elb,
+    nat_gateway,
     organizations,
     pricing,
     rds,
@@ -82,6 +83,8 @@ pub enum WasteKind {
     IncompleteMultipartUploads,
     /// CloudWatch log group with no retention policy (stores data forever)
     NoLogRetention,
+    /// NAT gateway with no or near-zero traffic (< 1 GB in 14 days)
+    IdleNatGateway,
 }
 
 /// Thresholds for idle/oversized detection (validated against kosty + aws-finops-dashboard).
@@ -112,6 +115,7 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
         lbs_res,
         s3_res,
         logs_res,
+        nat_gateways_res,
     ) = tokio::join!(
         ec2::list_instances(client, creds),
         ec2::list_volumes(client, creds),
@@ -124,6 +128,7 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
         elb::list_load_balancers(client, creds),
         s3::list_buckets_with_issues(client, creds),
         cloudwatch_logs::list_log_groups_without_retention(client, creds),
+        nat_gateway::list_nat_gateways(client, creds),
     );
 
     let instances = instances_res.unwrap_or_default();
@@ -137,6 +142,7 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
     let load_balancers = lbs_res.unwrap_or_default();
     let s3_buckets = s3_res.unwrap_or_default();
     let log_groups = logs_res.unwrap_or_default();
+    let nat_gateways = nat_gateways_res.unwrap_or_default();
 
     let mut findings: Vec<WasteItem> = Vec::new();
 
@@ -594,6 +600,42 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
             account_id: None,
             account_name: None,
         });
+    }
+
+    // ── NAT Gateway analysis ──────────────────────────────────────────────────
+
+    // Idle threshold: < 1 GB total egress bytes over 14 days.
+    const IDLE_NAT_BYTES: u64 = 1_073_741_824; // 1 GiB
+
+    for gw in &nat_gateways {
+        let is_idle = match gw.bytes_out_14d {
+            Some(b) => b < IDLE_NAT_BYTES,
+            None => gw.active_connections_max.map(|c| c == 0).unwrap_or(true),
+        };
+
+        if is_idle {
+            let bytes_gb = gw.bytes_out_14d.unwrap_or(0) as f64 / 1_073_741_824.0;
+            let conns = gw.active_connections_max.unwrap_or(0);
+            let name_part = gw.name.as_deref()
+                .map(|n| format!(" '{n}'"))
+                .unwrap_or_default();
+
+            findings.push(WasteItem {
+                resource_id: gw.id.clone(),
+                resource_type: "nat_gateway".into(),
+                region: gw.region.clone(),
+                issue: WasteKind::IdleNatGateway,
+                detail: format!(
+                    "NAT Gateway {}{name_part} (VPC: {}) processed {:.2} GB in 14d, peak {} active connections — appears idle",
+                    gw.id, gw.vpc_id, bytes_gb, conns,
+                ),
+                estimated_monthly_usd: pricing::nat_gateway_monthly(),
+                action: "Delete if no longer routing traffic. Verify with VPC team — \
+                         any instance in the private subnet using this NAT GW will lose internet access.".into(),
+                account_id: None,
+                account_name: None,
+            });
+        }
     }
 
     // Sort by estimated cost descending

@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use chrono::{Datelike, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 use super::auth::{sign, AwsCreds};
 use crate::types::CostEntry;
@@ -148,6 +149,166 @@ fn days_in_month(year: i32, month: u32) -> u32 {
     .unwrap()
     .signed_duration_since(NaiveDate::from_ymd_opt(year, month, 1).unwrap())
     .num_days() as u32
+}
+
+// ── Data transfer breakdown ───────────────────────────────────────────────────
+
+/// One usage-type line item from a data transfer cost breakdown.
+#[derive(Debug, Clone, Serialize)]
+pub struct DataTransferEntry {
+    pub usage_type: String,
+    pub description: String,
+    pub amount_usd: f64,
+}
+
+/// Fetch data transfer costs broken down by usage type for the given period.
+///
+/// Groups by USAGE_TYPE filtered to the "AWS Data Transfer" service.
+/// Returns items sorted by cost descending — useful for identifying
+/// expensive internet egress or cross-AZ traffic.
+pub async fn get_data_transfer_breakdown(
+    client: &reqwest::Client,
+    creds: &AwsCreds,
+    start: NaiveDate,
+    end: NaiveDate,
+) -> Result<Vec<DataTransferEntry>> {
+    let body = serde_json::to_vec(&serde_json::json!({
+        "TimePeriod": {
+            "Start": start.format("%Y-%m-%d").to_string(),
+            "End":   end.format("%Y-%m-%d").to_string(),
+        },
+        "Granularity": "MONTHLY",
+        "Filter": {
+            "Dimensions": {
+                "Key": "SERVICE",
+                "Values": ["AWS Data Transfer"],
+            }
+        },
+        "Metrics": ["UnblendedCost"],
+        "GroupBy": [{ "Type": "DIMENSION", "Key": "USAGE_TYPE" }],
+    }))?;
+
+    // Paginate and collect all entries
+    let mut all: HashMap<String, f64> = HashMap::new();
+    let mut next_token: Option<String> = None;
+
+    loop {
+        let body_with_token = if let Some(ref t) = next_token {
+            let mut v: serde_json::Value = serde_json::from_slice(&body)?;
+            v["NextPageToken"] = serde_json::Value::String(t.clone());
+            serde_json::to_vec(&v)?
+        } else {
+            body.clone()
+        };
+
+        let signed = sign(
+            creds,
+            "POST",
+            CE_ENDPOINT,
+            &[
+                ("content-type", CE_CONTENT_TYPE),
+                ("x-amz-target", CE_TARGET),
+            ],
+            &body_with_token,
+            "ce",
+        )?;
+
+        let mut req = client
+            .post(CE_ENDPOINT)
+            .header("content-type", CE_CONTENT_TYPE)
+            .header("x-amz-target", CE_TARGET)
+            .header("x-amz-date", &signed.x_amz_date)
+            .header("x-amz-content-sha256", &signed.x_amz_content_sha256)
+            .header("authorization", &signed.authorization)
+            .body(body_with_token);
+        if let Some(token) = &signed.x_amz_security_token {
+            req = req.header("x-amz-security-token", token);
+        }
+
+        let resp = req.send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("Cost Explorer error {status}: {text}"));
+        }
+
+        let data: CeResponse = resp.json().await?;
+        let token = data.next_page_token;
+
+        for result in data.results_by_time {
+            for group in result.groups {
+                if let Some(usage_type) = group.keys.into_iter().next() {
+                    let amount: f64 = group
+                        .metrics
+                        .get("UnblendedCost")
+                        .and_then(|m| m.amount.parse().ok())
+                        .unwrap_or(0.0);
+                    if amount > 0.0 {
+                        *all.entry(usage_type).or_default() += amount;
+                    }
+                }
+            }
+        }
+
+        match token {
+            Some(t) if !t.is_empty() => next_token = Some(t),
+            _ => break,
+        }
+    }
+
+    let mut entries: Vec<DataTransferEntry> = all
+        .into_iter()
+        .map(|(usage_type, amount_usd)| {
+            let description = describe_usage_type(&usage_type);
+            DataTransferEntry { usage_type, description, amount_usd }
+        })
+        .collect();
+
+    entries.sort_by(|a, b| b.amount_usd.partial_cmp(&a.amount_usd).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(entries)
+}
+
+/// Human-readable interpretation of a CE USAGE_TYPE string for data transfer.
+fn describe_usage_type(usage_type: &str) -> String {
+    let ut = usage_type.to_lowercase();
+    let region = usage_type_region(usage_type);
+
+    if ut.contains("cloudfront") && ut.contains("out") {
+        format!("CloudFront internet egress{region}")
+    } else if ut.contains("out-bytes") {
+        format!("Internet egress{region}")
+    } else if ut.contains("regional-bytes") {
+        format!("Cross-AZ / intra-region transfer{region}")
+    } else if ut.contains("in-bytes") {
+        format!("Inbound transfer{region} (typically free)")
+    } else if ut.contains("s3-egress") {
+        format!("S3 egress{region}")
+    } else {
+        usage_type.to_string()
+    }
+}
+
+/// Extract region name from a CE usage type prefix (e.g. "USE1" → " (us-east-1)").
+fn usage_type_region(usage_type: &str) -> &'static str {
+    let prefix = usage_type.split('-').next().unwrap_or("");
+    match prefix {
+        "USE1" => " (us-east-1)",
+        "USE2" => " (us-east-2)",
+        "USW1" => " (us-west-1)",
+        "USW2" => " (us-west-2)",
+        "EUW1" => " (eu-west-1)",
+        "EUW2" => " (eu-west-2)",
+        "EUW3" => " (eu-west-3)",
+        "EUC1" => " (eu-central-1)",
+        "EUN1" => " (eu-north-1)",
+        "APN1" => " (ap-northeast-1)",
+        "APN2" => " (ap-northeast-2)",
+        "APS1" => " (ap-southeast-1)",
+        "APS2" => " (ap-southeast-2)",
+        "SAE1" => " (sa-east-1)",
+        "CAC1" => " (ca-central-1)",
+        _ => "",
+    }
 }
 
 /// Org-wide costs per linked account — call from management account role.
