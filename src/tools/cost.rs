@@ -1,5 +1,5 @@
 use anyhow::Result;
-use chrono::NaiveDate;
+use chrono::{NaiveDate, Utc};
 use rmcp::{
     ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
@@ -76,13 +76,39 @@ impl CloudTools {
         }
     }
 
-    #[tool(description = "Analyse an AWS account for waste and optimisation opportunities. Checks: idle/oversized instances (CPU metrics), stopped instances, orphaned EBS volumes, gp2→gp3 upgrades, unattached EIPs, previous-gen instances, expiring Reserved Instances, unused AMIs (>90d), orphaned/stale EBS snapshots, unused key pairs, unused load balancers, S3 buckets without lifecycle policies, incomplete multipart uploads, and CloudWatch log groups without retention. Returns findings sorted by estimated monthly savings.")]
+    #[tool(description = "Analyse an AWS account for waste and optimisation opportunities. Checks: idle/oversized instances (CPU metrics), stopped instances, orphaned EBS volumes, gp2→gp3 upgrades, unattached EIPs, previous-gen instances, expiring Reserved Instances, unused AMIs (>90d), orphaned/stale EBS snapshots, unused key pairs, unused load balancers, idle NAT gateways (< 1 GB in 14 days), S3 buckets without lifecycle policies, incomplete multipart uploads, and CloudWatch log groups without retention. Returns findings sorted by estimated monthly savings.")]
     async fn find_aws_waste(&self, Parameters(input): Parameters<FindWasteInput>) -> String {
         WasteTool::new(self.http.clone()).run(input).await
+    }
+
+    #[tool(description = "Break down AWS data transfer costs by usage type for the last 30 days. Identifies expensive internet egress, cross-AZ traffic, and inter-region transfer. Returns items sorted by cost descending with human-readable descriptions (e.g. 'Internet egress (us-east-1)', 'Cross-AZ transfer').")]
+    async fn get_aws_data_transfer(&self, Parameters(input): Parameters<CompareAwsCostsInput>) -> String {
+        match self.do_data_transfer(input).await {
+            Ok(result) => result,
+            Err(e) => format!(r#"{{"error": "{e}"}}"#),
+        }
     }
 }
 
 impl CloudTools {
+    async fn do_data_transfer(&self, input: CompareAwsCostsInput) -> Result<String> {
+        let creds = assume_role(&self.http, &input.role_arn, input.external_id.as_deref()).await?;
+        let now = Utc::now().date_naive();
+        let start = now - chrono::Duration::days(30);
+        let entries = ce::get_data_transfer_breakdown(&self.http, &creds, start, now).await?;
+        let total: f64 = entries.iter().map(|e| e.amount_usd).sum();
+        let output = serde_json::json!({
+            "period": { "start": start.to_string(), "end": now.to_string() },
+            "total_usd": round2(total),
+            "by_usage_type": entries.iter().map(|e| serde_json::json!({
+                "usage_type": e.usage_type,
+                "description": e.description,
+                "amount_usd": round2(e.amount_usd),
+            })).collect::<Vec<_>>(),
+        });
+        Ok(serde_json::to_string_pretty(&output)?)
+    }
+
     async fn do_compare_costs(&self, input: CompareAwsCostsInput) -> Result<String> {
         let creds = assume_role(&self.http, &input.role_arn, input.external_id.as_deref()).await?;
         let comparison = ce::compare_costs(&self.http, &creds).await?;

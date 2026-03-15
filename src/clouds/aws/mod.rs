@@ -4,6 +4,7 @@ pub mod cloudwatch;
 pub mod cloudwatch_logs;
 pub mod ec2;
 pub mod elb;
+pub mod nat_gateway;
 pub mod organizations;
 pub mod pricing;
 pub mod rds;

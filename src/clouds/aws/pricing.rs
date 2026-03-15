@@ -164,6 +164,12 @@ pub fn lb_monthly(lb_type: &str) -> f64 {
     }
 }
 
+/// Monthly base charge for a NAT gateway (us-east-1) — excludes data processing fees.
+/// Data processing is billed separately at $0.045/GB but negligible for idle gateways.
+pub fn nat_gateway_monthly() -> f64 {
+    0.045 * HOURS_PER_MONTH // ~$32.85/month base charge
+}
+
 /// Estimated monthly cost for CloudWatch Log storage (per GB, us-east-1).
 pub fn cloudwatch_log_storage_monthly(stored_bytes: u64) -> f64 {
     let gb = stored_bytes as f64 / (1024.0 * 1024.0 * 1024.0);

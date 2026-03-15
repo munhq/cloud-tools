@@ -83,6 +83,7 @@ pub async fn serve(port: u16) -> anyhow::Result<()> {
         // AWS data (single-account or management-role service view)
         .route("/aws/costs", post(aws_costs))
         .route("/aws/costs/compare", post(aws_costs_compare))
+        .route("/aws/costs/data-transfer", post(aws_data_transfer))
         .route("/aws/waste", post(aws_waste))
         // AWS org-level data (management account must have MunbotFinOpsRole deployed)
         .route("/aws/org/costs", post(aws_org_costs))
@@ -135,6 +136,13 @@ async fn aws_costs_compare(
     Json(req): Json<AwsWasteRequest>, // same shape: role_arn + optional external_id
 ) -> (StatusCode, Json<serde_json::Value>) {
     handle!(do_aws_costs_compare(&s.http, req).await)
+}
+
+async fn aws_data_transfer(
+    State(s): State<Arc<AppState>>,
+    Json(req): Json<AwsWasteRequest>, // role_arn + optional external_id
+) -> (StatusCode, Json<serde_json::Value>) {
+    handle!(do_aws_data_transfer(&s.http, req).await)
 }
 
 async fn aws_waste(
@@ -222,6 +230,26 @@ async fn do_aws_costs_compare(
     let creds = assume_role(http, &req.role_arn, req.external_id.as_deref()).await?;
     let comparison = ce::compare_costs(http, &creds).await?;
     Ok(serde_json::to_value(comparison)?)
+}
+
+async fn do_aws_data_transfer(
+    http: &reqwest::Client,
+    req: AwsWasteRequest,
+) -> anyhow::Result<serde_json::Value> {
+    let creds = assume_role(http, &req.role_arn, req.external_id.as_deref()).await?;
+    let now = chrono::Utc::now().date_naive();
+    let start = now - chrono::Duration::days(30);
+    let entries = ce::get_data_transfer_breakdown(http, &creds, start, now).await?;
+    let total: f64 = entries.iter().map(|e| e.amount_usd).sum();
+    Ok(serde_json::json!({
+        "period": { "start": start.to_string(), "end": now.to_string() },
+        "total_usd": round2(total),
+        "by_usage_type": entries.iter().map(|e| serde_json::json!({
+            "usage_type": e.usage_type,
+            "description": e.description,
+            "amount_usd": round2(e.amount_usd),
+        })).collect::<Vec<_>>(),
+    }))
 }
 
 async fn do_aws_waste(
