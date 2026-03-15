@@ -164,6 +164,39 @@ pub fn lb_monthly(lb_type: &str) -> f64 {
     }
 }
 
+// ── Lambda pricing ────────────────────────────────────────────────────────────
+
+/// Cost per GB-second for Lambda compute (us-east-1). After the free tier.
+pub const LAMBDA_GB_SECOND_USD: f64 = 0.0000166667;
+
+/// Cost per 1 million Lambda requests (us-east-1).
+pub const LAMBDA_REQUEST_MILLION_USD: f64 = 0.20;
+
+/// Estimate monthly Lambda cost given invocations, avg duration, and memory.
+pub fn lambda_monthly(
+    invocations: u64,
+    avg_duration_ms: f64,
+    memory_mb: u32,
+) -> f64 {
+    let request_cost = (invocations as f64 / 1_000_000.0) * LAMBDA_REQUEST_MILLION_USD;
+    let gb_seconds = (memory_mb as f64 / 1024.0) * (avg_duration_ms / 1000.0) * invocations as f64;
+    let compute_cost = gb_seconds * LAMBDA_GB_SECOND_USD;
+    request_cost + compute_cost
+}
+
+// ── DynamoDB pricing ──────────────────────────────────────────────────────────
+
+/// Monthly cost per provisioned RCU (us-east-1).
+pub const DYNAMODB_RCU_MONTH_USD: f64 = 0.00013 * HOURS_PER_MONTH; // ~$0.0949/month per RCU
+
+/// Monthly cost per provisioned WCU (us-east-1).
+pub const DYNAMODB_WCU_MONTH_USD: f64 = 0.00065 * HOURS_PER_MONTH; // ~$0.4745/month per WCU
+
+/// Full monthly cost of a provisioned DynamoDB table.
+pub fn dynamodb_provisioned_monthly(rcu: u64, wcu: u64) -> f64 {
+    rcu as f64 * DYNAMODB_RCU_MONTH_USD + wcu as f64 * DYNAMODB_WCU_MONTH_USD
+}
+
 /// Monthly base charge for a NAT gateway (us-east-1) — excludes data processing fees.
 /// Data processing is billed separately at $0.045/GB but negligible for idle gateways.
 pub fn nat_gateway_monthly() -> f64 {

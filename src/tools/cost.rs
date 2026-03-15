@@ -76,7 +76,7 @@ impl CloudTools {
         }
     }
 
-    #[tool(description = "Analyse an AWS account for waste and optimisation opportunities. Checks: idle/oversized instances (CPU metrics), stopped instances, orphaned EBS volumes, gp2→gp3 upgrades, unattached EIPs, previous-gen instances, expiring Reserved Instances, unused AMIs (>90d), orphaned/stale EBS snapshots, unused key pairs, unused load balancers, idle NAT gateways (< 1 GB in 14 days), S3 buckets without lifecycle policies, incomplete multipart uploads, and CloudWatch log groups without retention. Returns findings sorted by estimated monthly savings.")]
+    #[tool(description = "Analyse an AWS account for waste and optimisation opportunities. Checks: idle/oversized EC2 (CPU metrics), stopped instances, orphaned EBS volumes, gp2→gp3 upgrades, unattached EIPs, previous-gen instance types, expiring Reserved Instances, unused AMIs (>90d), orphaned/stale EBS snapshots, unused key pairs, unused load balancers, idle NAT gateways (< 1 GB in 14 days), idle/zero-invocation Lambda functions, high Lambda error rates, idle/over-provisioned DynamoDB tables, S3 buckets without lifecycle policies, incomplete S3 multipart uploads, and CloudWatch log groups without retention. Returns findings sorted by estimated monthly savings.")]
     async fn find_aws_waste(&self, Parameters(input): Parameters<FindWasteInput>) -> String {
         WasteTool::new(self.http.clone()).run(input).await
     }
@@ -88,9 +88,25 @@ impl CloudTools {
             Err(e) => format!(r#"{{"error": "{e}"}}"#),
         }
     }
+
+    #[tool(description = "Analyse AWS Savings Plans: existing SP utilisation (are you using what you committed to?), coverage percentage (what % of eligible spend is covered?), and CE purchase recommendations showing estimated monthly savings from buying Compute or EC2 Instance Savings Plans. Call from the management/payer account for org-wide recommendations.")]
+    async fn get_aws_savings_plans(&self, Parameters(input): Parameters<CompareAwsCostsInput>) -> String {
+        match self.do_savings_plans(input).await {
+            Ok(result) => result,
+            Err(e) => format!(r#"{{"error": "{e}"}}"#),
+        }
+    }
 }
 
 impl CloudTools {
+    async fn do_savings_plans(&self, input: CompareAwsCostsInput) -> Result<String> {
+        let creds = assume_role(&self.http, &input.role_arn, input.external_id.as_deref()).await?;
+        let now = Utc::now().date_naive();
+        let start = now - chrono::Duration::days(30);
+        let report = ce::get_savings_plans_report(&self.http, &creds, start, now).await?;
+        Ok(serde_json::to_string_pretty(&report)?)
+    }
+
     async fn do_data_transfer(&self, input: CompareAwsCostsInput) -> Result<String> {
         let creds = assume_role(&self.http, &input.role_arn, input.external_id.as_deref()).await?;
         let now = Utc::now().date_naive();

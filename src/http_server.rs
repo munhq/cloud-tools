@@ -1,6 +1,6 @@
 use axum::{Json, Router, extract::State, http::StatusCode, routing::get, routing::post};
 use axum::response::IntoResponse;
-use chrono::NaiveDate;
+use chrono::{Duration as ChronoDuration, NaiveDate};
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -84,6 +84,7 @@ pub async fn serve(port: u16) -> anyhow::Result<()> {
         .route("/aws/costs", post(aws_costs))
         .route("/aws/costs/compare", post(aws_costs_compare))
         .route("/aws/costs/data-transfer", post(aws_data_transfer))
+        .route("/aws/savings-plans", post(aws_savings_plans))
         .route("/aws/waste", post(aws_waste))
         // AWS org-level data (management account must have MunbotFinOpsRole deployed)
         .route("/aws/org/costs", post(aws_org_costs))
@@ -143,6 +144,13 @@ async fn aws_data_transfer(
     Json(req): Json<AwsWasteRequest>, // role_arn + optional external_id
 ) -> (StatusCode, Json<serde_json::Value>) {
     handle!(do_aws_data_transfer(&s.http, req).await)
+}
+
+async fn aws_savings_plans(
+    State(s): State<Arc<AppState>>,
+    Json(req): Json<AwsWasteRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    handle!(do_aws_savings_plans(&s.http, req).await)
 }
 
 async fn aws_waste(
@@ -250,6 +258,17 @@ async fn do_aws_data_transfer(
             "amount_usd": round2(e.amount_usd),
         })).collect::<Vec<_>>(),
     }))
+}
+
+async fn do_aws_savings_plans(
+    http: &reqwest::Client,
+    req: AwsWasteRequest,
+) -> anyhow::Result<serde_json::Value> {
+    let creds = assume_role(http, &req.role_arn, req.external_id.as_deref()).await?;
+    let now = chrono::Utc::now().date_naive();
+    let start = now - ChronoDuration::days(30);
+    let report = ce::get_savings_plans_report(http, &creds, start, now).await?;
+    Ok(serde_json::to_value(report)?)
 }
 
 async fn do_aws_waste(
