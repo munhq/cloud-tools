@@ -197,6 +197,64 @@ pub fn dynamodb_provisioned_monthly(rcu: u64, wcu: u64) -> f64 {
     rcu as f64 * DYNAMODB_RCU_MONTH_USD + wcu as f64 * DYNAMODB_WCU_MONTH_USD
 }
 
+// ── ElastiCache pricing ──────────────────────────────────────────────────────
+
+/// On-demand hourly price for common ElastiCache node types (us-east-1).
+pub fn elasticache_hourly(node_type: &str) -> Option<f64> {
+    let price = match node_type {
+        // cache.t3 family
+        "cache.t3.micro"    => 0.017,
+        "cache.t3.small"    => 0.034,
+        "cache.t3.medium"   => 0.068,
+        // cache.t4g family (Graviton)
+        "cache.t4g.micro"   => 0.016,
+        "cache.t4g.small"   => 0.032,
+        "cache.t4g.medium"  => 0.065,
+        // cache.m5 family
+        "cache.m5.large"    => 0.124,
+        "cache.m5.xlarge"   => 0.248,
+        "cache.m5.2xlarge"  => 0.496,
+        "cache.m5.4xlarge"  => 0.992,
+        // cache.m6g family (Graviton)
+        "cache.m6g.large"   => 0.118,
+        "cache.m6g.xlarge"  => 0.235,
+        "cache.m6g.2xlarge" => 0.470,
+        // cache.m7g family (Graviton3)
+        "cache.m7g.large"   => 0.127,
+        "cache.m7g.xlarge"  => 0.253,
+        "cache.m7g.2xlarge" => 0.506,
+        // cache.r5 family
+        "cache.r5.large"    => 0.166,
+        "cache.r5.xlarge"   => 0.332,
+        "cache.r5.2xlarge"  => 0.664,
+        "cache.r5.4xlarge"  => 1.328,
+        // cache.r6g family (Graviton)
+        "cache.r6g.large"   => 0.157,
+        "cache.r6g.xlarge"  => 0.314,
+        "cache.r6g.2xlarge" => 0.629,
+        // cache.r7g family (Graviton3)
+        "cache.r7g.large"   => 0.170,
+        "cache.r7g.xlarge"  => 0.339,
+        "cache.r7g.2xlarge" => 0.679,
+        _ => return None,
+    };
+    Some(price)
+}
+
+/// Estimate monthly cost for an ElastiCache cluster (all nodes).
+pub fn elasticache_monthly(node_type: &str, num_nodes: u32) -> Option<f64> {
+    elasticache_hourly(node_type).map(|h| h * HOURS_PER_MONTH * num_nodes as f64)
+}
+
+/// Previous-generation ElastiCache node families — flag for upgrade.
+pub const PREV_GEN_CACHE_FAMILIES: &[&str] = &[
+    "cache.t2", "cache.m3", "cache.m4", "cache.r3", "cache.r4",
+];
+
+pub fn is_prev_gen_cache(node_type: &str) -> bool {
+    PREV_GEN_CACHE_FAMILIES.iter().any(|prefix| node_type.starts_with(prefix))
+}
+
 /// Monthly base charge for a NAT gateway (us-east-1) — excludes data processing fees.
 /// Data processing is billed separately at $0.045/GB but negligible for idle gateways.
 pub fn nat_gateway_monthly() -> f64 {

@@ -4,6 +4,7 @@ pub mod cloudwatch;
 pub mod cloudwatch_logs;
 pub mod dynamodb;
 pub mod ec2;
+pub mod elasticache;
 pub mod elb;
 pub mod lambda;
 pub mod nat_gateway;

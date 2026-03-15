@@ -9,6 +9,7 @@ use crate::clouds::aws::{
     cloudwatch_logs,
     dynamodb,
     ec2::{self, EbsVolume},
+    elasticache,
     elb,
     lambda,
     nat_gateway,
@@ -95,6 +96,12 @@ pub enum WasteKind {
     OverprovisionedDynamoDb,
     /// DynamoDB PROVISIONED table with no reads or writes in 14 days
     IdleDynamoDb,
+    /// ElastiCache cluster with near-zero connections — idle
+    IdleElastiCache,
+    /// ElastiCache cluster with low CPU / low connections — oversized
+    OversizedElastiCache,
+    /// ElastiCache cluster using previous-generation node type
+    PrevGenElastiCache,
 }
 
 /// Thresholds for idle/oversized detection (validated against kosty + aws-finops-dashboard).
@@ -128,6 +135,7 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
         nat_gateways_res,
         lambda_res,
         dynamodb_res,
+        elasticache_res,
     ) = tokio::join!(
         ec2::list_instances(client, creds),
         ec2::list_volumes(client, creds),
@@ -143,6 +151,7 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
         nat_gateway::list_nat_gateways(client, creds),
         lambda::list_functions(client, creds),
         dynamodb::list_tables(client, creds),
+        elasticache::list_clusters(client, creds),
     );
 
     let instances = instances_res.unwrap_or_default();
@@ -159,6 +168,7 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
     let nat_gateways = nat_gateways_res.unwrap_or_default();
     let lambda_functions = lambda_res.unwrap_or_default();
     let dynamo_tables = dynamodb_res.unwrap_or_default();
+    let elasticache_clusters = elasticache_res.unwrap_or_default();
 
     let mut findings: Vec<WasteItem> = Vec::new();
 
@@ -758,6 +768,87 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
                 });
             }
             _ => {} // sufficient utilisation or no data — skip
+        }
+    }
+
+    // ── ElastiCache analysis ─────────────────────────────────────────────────
+
+    for cluster in &elasticache_clusters {
+        let monthly = pricing::elasticache_monthly(&cluster.node_type, cluster.num_nodes)
+            .unwrap_or(0.0);
+
+        // Idle: near-zero connections over 14 days
+        let is_idle = match cluster.peak_connections_14d {
+            Some(0) | None => true,
+            Some(peak) => peak <= 1 && cluster.avg_connections_14d.unwrap_or(0.0) < 0.5,
+        };
+
+        if is_idle {
+            let peak = cluster.peak_connections_14d.unwrap_or(0);
+            findings.push(WasteItem {
+                resource_id: cluster.cluster_id.clone(),
+                resource_type: "elasticache_cluster".into(),
+                region: cluster.region.clone(),
+                issue: WasteKind::IdleElastiCache,
+                detail: format!(
+                    "ElastiCache '{}' ({} {} x{} {}) peak {} connections in 14 days — appears idle",
+                    cluster.cluster_id, cluster.engine, cluster.node_type,
+                    cluster.num_nodes, cluster.engine_version, peak,
+                ),
+                estimated_monthly_usd: monthly,
+                action: "Delete cluster if no longer needed. Check application connection strings \
+                         and DNS CNAMEs before removing.".into(),
+                account_id: None,
+                account_name: None,
+            });
+            continue;
+        }
+
+        // Oversized: very low CPU and low connection count
+        if let Some(avg_cpu) = cluster.avg_cpu_14d {
+            let avg_conns = cluster.avg_connections_14d.unwrap_or(0.0);
+            if avg_cpu < 5.0 && avg_conns < 10.0 && monthly > 50.0 {
+                let savings = monthly * 0.5; // estimate 50% savings from downsizing
+                findings.push(WasteItem {
+                    resource_id: cluster.cluster_id.clone(),
+                    resource_type: "elasticache_cluster".into(),
+                    region: cluster.region.clone(),
+                    issue: WasteKind::OversizedElastiCache,
+                    detail: format!(
+                        "ElastiCache '{}' ({} {} x{}) avg CPU {:.1}%, avg {:.0} connections over 14 days — oversized",
+                        cluster.cluster_id, cluster.engine, cluster.node_type,
+                        cluster.num_nodes, avg_cpu, avg_conns,
+                    ),
+                    estimated_monthly_usd: savings,
+                    action: format!(
+                        "Consider downsizing from {} to a smaller node type, or reducing replica count from {}",
+                        cluster.node_type, cluster.num_nodes,
+                    ),
+                    account_id: None,
+                    account_name: None,
+                });
+            }
+        }
+
+        // Previous-generation node type
+        if pricing::is_prev_gen_cache(&cluster.node_type) {
+            findings.push(WasteItem {
+                resource_id: cluster.cluster_id.clone(),
+                resource_type: "elasticache_cluster".into(),
+                region: cluster.region.clone(),
+                issue: WasteKind::PrevGenElastiCache,
+                detail: format!(
+                    "ElastiCache '{}' uses previous-gen node type {} — newer gen is cheaper and faster",
+                    cluster.cluster_id, cluster.node_type,
+                ),
+                estimated_monthly_usd: monthly * 0.1,
+                action: format!(
+                    "Migrate {} to current-gen equivalent (cache.m4→cache.m7g, cache.r4→cache.r7g)",
+                    cluster.node_type,
+                ),
+                account_id: None,
+                account_name: None,
+            });
         }
     }
 
