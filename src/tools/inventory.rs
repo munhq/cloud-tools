@@ -1,3 +1,2 @@
-// MCP tool: list_resources — works across AWS, GCP, Cloudflare
-// Calls clouds/aws/ec2.rs + clouds/aws/rds.rs + clouds/gcp/compute.rs
-// Returns normalized Resource[]
+// Placeholder removed — munbot calls cloud-tools over HTTP, not MCP.
+// Resource inventory is served at /aws/waste, /gcp/resources, /cloudflare/resources, /ovh/resources.

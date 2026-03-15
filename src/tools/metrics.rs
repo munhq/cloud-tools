@@ -1,3 +1,2 @@
-// MCP tool: get_metrics — works across AWS, GCP
-// Calls clouds/aws/cloudwatch.rs + clouds/gcp/monitoring.rs
-// Returns normalized MetricSeries[]
+// Placeholder removed — munbot calls cloud-tools over HTTP, not MCP.
+// Metrics will be added as HTTP endpoints when DBA/DevOps agents need them.

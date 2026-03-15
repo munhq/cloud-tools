@@ -12,6 +12,14 @@ use crate::clouds::aws::{auth::assume_role, ce};
 use crate::tools::waste::{FindWasteInput, WasteTool};
 use crate::types::CostEntry;
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct CompareAwsCostsInput {
+    #[schemars(description = "Customer's IAM Role ARN, e.g. arn:aws:iam::123456789:role/CloudToolsReadOnly")]
+    pub role_arn: String,
+    #[schemars(description = "Optional external ID from the role's trust policy")]
+    pub external_id: Option<String>,
+}
+
 // ── Input types ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -60,13 +68,27 @@ impl CloudTools {
         }
     }
 
-    #[tool(description = "Analyse an AWS account for waste, idle resources, oversized instances, orphaned volumes, unattached EIPs, and optimisation opportunities. Returns findings sorted by estimated monthly savings.")]
+    #[tool(description = "Fair month-over-month cost comparison. Compares identical day windows (e.g. Mar 1-12 vs Feb 1-12) to avoid misleading partial-month deltas. Returns current vs previous period totals, percentage change, and per-service breakdown sorted by biggest movers.")]
+    async fn compare_aws_costs(&self, Parameters(input): Parameters<CompareAwsCostsInput>) -> String {
+        match self.do_compare_costs(input).await {
+            Ok(result) => result,
+            Err(e) => format!(r#"{{"error": "{e}"}}"#),
+        }
+    }
+
+    #[tool(description = "Analyse an AWS account for waste and optimisation opportunities. Checks: idle/oversized instances (CPU metrics), stopped instances, orphaned EBS volumes, gp2→gp3 upgrades, unattached EIPs, previous-gen instances, expiring Reserved Instances, unused AMIs (>90d), orphaned/stale EBS snapshots, unused key pairs, unused load balancers, S3 buckets without lifecycle policies, incomplete multipart uploads, and CloudWatch log groups without retention. Returns findings sorted by estimated monthly savings.")]
     async fn find_aws_waste(&self, Parameters(input): Parameters<FindWasteInput>) -> String {
         WasteTool::new(self.http.clone()).run(input).await
     }
 }
 
 impl CloudTools {
+    async fn do_compare_costs(&self, input: CompareAwsCostsInput) -> Result<String> {
+        let creds = assume_role(&self.http, &input.role_arn, input.external_id.as_deref()).await?;
+        let comparison = ce::compare_costs(&self.http, &creds).await?;
+        Ok(serde_json::to_string_pretty(&comparison)?)
+    }
+
     async fn fetch_aws_costs(&self, input: GetAwsCostsInput) -> Result<String> {
         let creds = assume_role(&self.http, &input.role_arn, input.external_id.as_deref()).await?;
 

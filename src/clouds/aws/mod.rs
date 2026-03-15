@@ -1,10 +1,13 @@
 pub mod auth;
 pub mod ce;
 pub mod cloudwatch;
+pub mod cloudwatch_logs;
 pub mod ec2;
+pub mod elb;
 pub mod organizations;
 pub mod pricing;
 pub mod rds;
+pub mod s3;
 
 // ── Shared XML helpers used across all AWS modules ────────────────────────────
 

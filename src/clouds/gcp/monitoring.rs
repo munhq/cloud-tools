@@ -1,1 +1,2 @@
-// Cloud Monitoring API client
+// Placeholder removed — GCP Cloud Monitoring client will be implemented
+// when an agent (DBA, DevOps) needs GCP metrics data.
