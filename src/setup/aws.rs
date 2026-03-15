@@ -98,6 +98,7 @@ Resources:
                   - lambda:ListFunctions
                   - dynamodb:ListTables
                   - dynamodb:DescribeTable
+                  - elasticache:DescribeCacheClusters
                   - s3:ListAllMyBuckets
                   - s3:GetBucketLocation
                   - s3:GetBucketLifecycleConfiguration
@@ -180,6 +181,7 @@ Resources:
                   - lambda:ListFunctions
                   - dynamodb:ListTables
                   - dynamodb:DescribeTable
+                  - elasticache:DescribeCacheClusters
                   - s3:ListAllMyBuckets
                   - s3:GetBucketLocation
                   - s3:GetBucketLifecycleConfiguration
