@@ -99,6 +99,13 @@ Resources:
                   - dynamodb:ListTables
                   - dynamodb:DescribeTable
                   - elasticache:DescribeCacheClusters
+                  - ecs:ListClusters
+                  - ecs:DescribeClusters
+                  - ecs:ListServices
+                  - ecs:DescribeServices
+                  - compute-optimizer:GetEnrollmentStatus
+                  - compute-optimizer:GetEC2InstanceRecommendations
+                  - pricing:GetProducts
                   - s3:ListAllMyBuckets
                   - s3:GetBucketLocation
                   - s3:GetBucketLifecycleConfiguration
@@ -182,6 +189,13 @@ Resources:
                   - dynamodb:ListTables
                   - dynamodb:DescribeTable
                   - elasticache:DescribeCacheClusters
+                  - ecs:ListClusters
+                  - ecs:DescribeClusters
+                  - ecs:ListServices
+                  - ecs:DescribeServices
+                  - compute-optimizer:GetEnrollmentStatus
+                  - compute-optimizer:GetEC2InstanceRecommendations
+                  - pricing:GetProducts
                   - s3:ListAllMyBuckets
                   - s3:GetBucketLocation
                   - s3:GetBucketLifecycleConfiguration

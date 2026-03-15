@@ -7,14 +7,17 @@ use crate::clouds::aws::{
     auth::{assume_role, AwsCreds},
     cloudwatch,
     cloudwatch_logs,
+    compute_optimizer,
     dynamodb,
     ec2::{self, EbsVolume},
+    ecs,
     elasticache,
     elb,
     lambda,
     nat_gateway,
     organizations,
     pricing,
+    pricing_api::PriceCache,
     rds,
     s3,
 };
@@ -102,6 +105,10 @@ pub enum WasteKind {
     OversizedElastiCache,
     /// ElastiCache cluster using previous-generation node type
     PrevGenElastiCache,
+    /// AWS Compute Optimizer says this EC2 instance is over-provisioned
+    ComputeOptimizerRightsizing,
+    /// ECS service with 0 running tasks
+    IdleEcsService,
 }
 
 /// Thresholds for idle/oversized detection (validated against kosty + aws-finops-dashboard).
@@ -136,6 +143,8 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
         lambda_res,
         dynamodb_res,
         elasticache_res,
+        ecs_res,
+        co_res,
     ) = tokio::join!(
         ec2::list_instances(client, creds),
         ec2::list_volumes(client, creds),
@@ -152,6 +161,8 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
         lambda::list_functions(client, creds),
         dynamodb::list_tables(client, creds),
         elasticache::list_clusters(client, creds),
+        ecs::list_services(client, creds),
+        compute_optimizer::get_ec2_recommendations(client, creds),
     );
 
     let instances = instances_res.unwrap_or_default();
@@ -169,6 +180,27 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
     let lambda_functions = lambda_res.unwrap_or_default();
     let dynamo_tables = dynamodb_res.unwrap_or_default();
     let elasticache_clusters = elasticache_res.unwrap_or_default();
+    let ecs_services = ecs_res.unwrap_or_default();
+    let co_recommendations = co_res.unwrap_or_default();
+
+    // ── Build per-region price cache ──────────────────────────────────────────
+    //
+    // Queries the AWS Pricing API for real prices in each region.
+    // Falls back to hardcoded us-east-1 prices on any API failure.
+    let ec2_queries: Vec<(String, String)> = instances
+        .iter()
+        .filter(|i| i.state == "running")
+        .map(|i| (i.instance_type.clone(), i.region.clone()))
+        .collect();
+    let rds_queries: Vec<(String, String, String)> = rds_instances
+        .iter()
+        .map(|d| (d.instance_class.clone(), d.region.clone(), d.engine.clone()))
+        .collect();
+    let cache_queries: Vec<(String, String, String)> = elasticache_clusters
+        .iter()
+        .map(|c| (c.node_type.clone(), c.region.clone(), c.engine.clone()))
+        .collect();
+    let prices = PriceCache::build(client, creds, &ec2_queries, &rds_queries, &cache_queries).await;
 
     let mut findings: Vec<WasteItem> = Vec::new();
 
@@ -204,7 +236,7 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
     let _ = instance_ami_ids; // suppress unused warning; AMI check uses age-based heuristic
 
     for inst in &instances {
-        let monthly = pricing::ec2_monthly(&inst.instance_type).unwrap_or(0.0);
+        let monthly = prices.ec2_monthly(&inst.instance_type, &inst.region).unwrap_or(0.0);
 
         // Stopped instances still incur EBS costs
         if inst.state == "stopped" {
@@ -352,7 +384,7 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
     }
 
     for db in &rds_instances {
-        let monthly = pricing::rds_monthly(&db.instance_class).unwrap_or(0.0);
+        let monthly = prices.rds_monthly(&db.instance_class, &db.region).unwrap_or(0.0);
         if let Some(stats) = rds_cpu.get(&db.id) {
             if stats.sample_count > 0 && stats.avg_percent < IDLE_CPU_PCT {
                 findings.push(WasteItem {
@@ -774,7 +806,7 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
     // ── ElastiCache analysis ─────────────────────────────────────────────────
 
     for cluster in &elasticache_clusters {
-        let monthly = pricing::elasticache_monthly(&cluster.node_type, cluster.num_nodes)
+        let monthly = prices.elasticache_monthly(&cluster.node_type, cluster.num_nodes, &cluster.region)
             .unwrap_or(0.0);
 
         // Idle: near-zero connections over 14 days
@@ -886,6 +918,73 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
                 account_name: None,
             });
         }
+    }
+
+    // ── ECS analysis ────────────────────────────────────────────────────────
+
+    for svc in &ecs_services {
+        if svc.status != "ACTIVE" {
+            continue;
+        }
+
+        if svc.running_count == 0 {
+            findings.push(WasteItem {
+                resource_id: svc.service_arn.clone(),
+                resource_type: "ecs_service".into(),
+                region: svc.region.clone(),
+                issue: WasteKind::IdleEcsService,
+                detail: format!(
+                    "ECS service '{}' in cluster '{}' ({}) has 0 running tasks (desired: {})",
+                    svc.service_name, svc.cluster_name, svc.launch_type, svc.desired_count,
+                ),
+                estimated_monthly_usd: if svc.launch_type == "FARGATE" && svc.desired_count > 0 {
+                    // Fargate with desired > 0 but running = 0 means tasks are failing to start
+                    // Estimate based on minimum Fargate pricing (0.25 vCPU, 0.5 GB)
+                    svc.desired_count as f64 * 9.43 // ~$9.43/month per min Fargate task
+                } else {
+                    0.0 // EC2 launch type — cost is in the EC2 instances, not the service
+                },
+                action: if svc.desired_count == 0 {
+                    "Service is scaled to zero. Delete if no longer needed, \
+                     or verify this is intentional (e.g. scheduled scaling).".into()
+                } else {
+                    "Service has desired tasks but none are running — tasks may be failing to start. \
+                     Check ECS events and CloudWatch Logs for errors.".into()
+                },
+                account_id: None,
+                account_name: None,
+            });
+        }
+    }
+
+    // ── Compute Optimizer recommendations ──────────────────────────────────
+
+    for rec in &co_recommendations {
+        findings.push(WasteItem {
+            resource_id: rec.instance_arn.clone(),
+            resource_type: "ec2_instance".into(),
+            region: rec.region.clone(),
+            issue: WasteKind::ComputeOptimizerRightsizing,
+            detail: format!(
+                "Compute Optimizer: {} → {} (reasons: {}). \
+                 Based on 14-day ML analysis of CPU, memory, disk, and network.",
+                rec.current_instance_type,
+                rec.recommended_instance_type,
+                if rec.finding_reasons.is_empty() {
+                    "over-provisioned".to_string()
+                } else {
+                    rec.finding_reasons.join(", ")
+                },
+            ),
+            estimated_monthly_usd: rec.estimated_monthly_savings_usd,
+            action: format!(
+                "Downsize from {} to {}. AWS Compute Optimizer confidence is higher than \
+                 threshold-based checks — this is based on actual workload patterns.",
+                rec.current_instance_type, rec.recommended_instance_type,
+            ),
+            account_id: None,
+            account_name: None,
+        });
     }
 
     // Sort by estimated cost descending
