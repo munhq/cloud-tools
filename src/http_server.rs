@@ -45,6 +45,10 @@ struct GcpRequest {
     service_account_json: String,
     project_id: String,
     billing_account_id: String,
+    #[serde(default)]
+    billing_table: Option<String>,
+    #[serde(default)]
+    organization_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -91,8 +95,10 @@ pub async fn serve(port: u16) -> anyhow::Result<()> {
         .route("/aws/org/waste", post(aws_org_waste))
         // GCP
         .route("/gcp/costs", post(gcp_costs))
+        .route("/gcp/costs/compare", post(gcp_costs_compare))
         .route("/gcp/resources", post(gcp_resources))
         .route("/gcp/waste", post(gcp_waste))
+        .route("/gcp/org/waste", post(gcp_org_waste))
         // Cloudflare
         .route("/cloudflare/costs", post(cf_costs))
         .route("/cloudflare/resources", post(cf_resources))
@@ -189,11 +195,25 @@ async fn gcp_resources(
     handle!(do_gcp_resources(&s.http, req).await)
 }
 
+async fn gcp_costs_compare(
+    State(s): State<Arc<AppState>>,
+    Json(req): Json<GcpRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    handle!(do_gcp_costs_compare(&s.http, req).await)
+}
+
 async fn gcp_waste(
     State(s): State<Arc<AppState>>,
     Json(req): Json<GcpRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
     handle!(do_gcp_waste(&s.http, req).await)
+}
+
+async fn gcp_org_waste(
+    State(s): State<Arc<AppState>>,
+    Json(req): Json<GcpRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    handle!(do_gcp_org_waste(&s.http, req).await)
 }
 
 async fn cf_costs(
@@ -346,11 +366,7 @@ async fn do_gcp_costs(
     http: &reqwest::Client,
     req: GcpRequest,
 ) -> anyhow::Result<serde_json::Value> {
-    let creds = GcpCreds {
-        service_account_json: req.service_account_json,
-        project_id: req.project_id,
-        billing_account_id: req.billing_account_id,
-    };
+    let creds = gcp_creds(req);
     let costs = gcp_billing::get_costs(http, &creds).await?;
     let now = chrono::Utc::now().date_naive();
     let start = (now - chrono::Duration::days(30)).to_string();
@@ -362,11 +378,7 @@ async fn do_gcp_resources(
     http: &reqwest::Client,
     req: GcpRequest,
 ) -> anyhow::Result<serde_json::Value> {
-    let creds = GcpCreds {
-        service_account_json: req.service_account_json,
-        project_id: req.project_id,
-        billing_account_id: req.billing_account_id,
-    };
+    let creds = gcp_creds(req);
     let resources = compute::list_resources(http, &creds).await?;
     let json: Vec<serde_json::Value> = resources
         .into_iter()
@@ -375,15 +387,20 @@ async fn do_gcp_resources(
     Ok(serde_json::json!({ "total_count": json.len(), "resources": json }))
 }
 
+async fn do_gcp_costs_compare(
+    http: &reqwest::Client,
+    req: GcpRequest,
+) -> anyhow::Result<serde_json::Value> {
+    let creds = gcp_creds(req);
+    let comparison = gcp_billing::compare_costs(http, &creds).await?;
+    Ok(serde_json::to_value(comparison)?)
+}
+
 async fn do_gcp_waste(
     http: &reqwest::Client,
     req: GcpRequest,
 ) -> anyhow::Result<serde_json::Value> {
-    let creds = GcpCreds {
-        service_account_json: req.service_account_json,
-        project_id: req.project_id,
-        billing_account_id: req.billing_account_id,
-    };
+    let creds = gcp_creds(req);
     let findings: Vec<WasteItem> = gcp_waste::analyse(http, &creds).await?;
     let total: f64 = findings.iter().map(|f| f.estimated_monthly_usd).sum();
     Ok(serde_json::json!({
@@ -391,6 +408,15 @@ async fn do_gcp_waste(
         "finding_count": findings.len(),
         "findings": findings,
     }))
+}
+
+async fn do_gcp_org_waste(
+    http: &reqwest::Client,
+    req: GcpRequest,
+) -> anyhow::Result<serde_json::Value> {
+    let creds = gcp_creds(req);
+    let report = gcp_waste::analyse_org(http, &creds).await?;
+    Ok(serde_json::to_value(report)?)
 }
 
 async fn do_cf_costs(
@@ -537,6 +563,16 @@ fn resource_json(
         "last_active_at": last_active_at,
         "raw_data": raw.to_string(),
     })
+}
+
+fn gcp_creds(req: GcpRequest) -> GcpCreds {
+    GcpCreds {
+        service_account_json: req.service_account_json,
+        project_id: req.project_id,
+        billing_account_id: req.billing_account_id,
+        billing_table: req.billing_table,
+        organization_id: req.organization_id,
+    }
 }
 
 fn round2(v: f64) -> f64 {

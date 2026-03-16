@@ -7,16 +7,18 @@
 use anyhow::Result;
 use chrono::{DateTime, Duration, Utc};
 
-use super::waste::{WasteItem, WasteKind};
+use super::waste::{OrgWasteReport, WasteItem, WasteKind};
 use crate::clouds::gcp::{
     auth::GcpCreds,
     cloud_functions,
     cloud_run,
     cloud_sql,
+    commitments,
     compute,
     gke,
     monitoring,
     recommender,
+    resource_manager,
     storage,
 };
 
@@ -26,6 +28,14 @@ const IDLE_CPU_FRACTION: f64 = 0.05;     // 5% (GCP returns 0.0–1.0, not perce
 const OVERSIZED_CPU_FRACTION: f64 = 0.20; // 20%
 const STALE_SNAPSHOT_DAYS: i64 = 90;
 const STATIC_IP_MONTHLY_USD: f64 = 7.30;  // $0.01/hr for unattached static IP
+
+/// Previous-generation GCE machine type families.
+const PREV_GEN_FAMILIES: &[&str] = &["n1", "f1", "g1"];
+
+fn is_prev_gen_machine(machine_type: &str) -> bool {
+    let family = machine_type.split('-').next().unwrap_or("");
+    PREV_GEN_FAMILIES.contains(&family)
+}
 
 // ── GCE pricing (rough estimates, us-central1) ──────────────────────────────
 
@@ -161,6 +171,28 @@ pub async fn analyse(client: &reqwest::Client, creds: &GcpCreds) -> Result<Vec<W
                 account_name: None,
             });
             continue;
+        }
+
+        // Previous-generation machine type
+        if is_prev_gen_machine(machine_type) && status == "RUNNING" {
+            findings.push(WasteItem {
+                resource_id: inst.resource_id.clone(),
+                resource_type: "gce_instance".into(),
+                region: inst.region.clone().unwrap_or_default(),
+                issue: WasteKind::PrevGenInstance,
+                detail: format!(
+                    "GCE '{}' uses previous-gen type {} — n2/e2 family is cheaper and faster",
+                    inst.name.as_deref().unwrap_or(&inst.resource_id),
+                    machine_type,
+                ),
+                estimated_monthly_usd: monthly * 0.1,
+                action: format!(
+                    "Migrate {} to current-gen equivalent (n1→n2/e2, f1→e2-micro, g1→e2-small)",
+                    machine_type,
+                ),
+                account_id: None,
+                account_name: None,
+            });
         }
 
         // Running — check CPU via Cloud Monitoring
@@ -424,6 +456,49 @@ pub async fn analyse(client: &reqwest::Client, creds: &GcpCreds) -> Result<Vec<W
         }
     }
 
+    // ── Committed Use Discounts (CUDs) ─────────────────────────────────
+
+    let cuds = commitments::list_commitments(client, creds).await.unwrap_or_default();
+    let cud_expiry_threshold = now + Duration::days(30);
+
+    for cud in &cuds {
+        if cud.status != "ACTIVE" {
+            continue;
+        }
+        if let Some(ref end_ts) = cud.end_timestamp {
+            if let Ok(end_time) = end_ts.parse::<DateTime<Utc>>() {
+                if end_time < cud_expiry_threshold {
+                    let days_left = (end_time - now).num_days();
+                    let status_text = if days_left < 0 { "EXPIRED" } else { "expiring" };
+                    let resources_desc: Vec<String> = cud.resources.iter()
+                        .map(|r| format!("{} {}", r.amount, r.resource_type))
+                        .collect();
+
+                    findings.push(WasteItem {
+                        resource_id: cud.name.clone(),
+                        resource_type: "gcp_commitment".into(),
+                        region: cud.region.clone(),
+                        issue: WasteKind::ExpiringReservedInstance,
+                        detail: format!(
+                            "CUD '{}' ({} {}) is {} ({}) — {}",
+                            cud.name, cud.plan, cud.category, status_text,
+                            if days_left < 0 {
+                                format!("expired {} days ago", -days_left)
+                            } else {
+                                format!("{} days remaining", days_left)
+                            },
+                            resources_desc.join(", "),
+                        ),
+                        estimated_monthly_usd: 0.0, // CUD cost is already committed
+                        action: "Renew commitment, adjust resource allocation, or switch to on-demand if workload changed".into(),
+                        account_id: None,
+                        account_name: None,
+                    });
+                }
+            }
+        }
+    }
+
     // ── Recommender API findings ─────────────────────────────────────────
 
     for rec in &recommendations {
@@ -470,4 +545,82 @@ pub async fn analyse(client: &reqwest::Client, creds: &GcpCreds) -> Result<Vec<W
     });
 
     Ok(findings)
+}
+
+/// Run waste analysis across all projects accessible by the service account.
+///
+/// Discovers projects via Cloud Resource Manager, then analyses each in parallel.
+/// This is the GCP equivalent of AWS `analyse_org`.
+pub async fn analyse_org(
+    client: &reqwest::Client,
+    creds: &GcpCreds,
+) -> Result<OrgWasteReport> {
+    let projects = resource_manager::list_projects(client, creds).await?;
+    let total_accounts = projects.len();
+
+    let scan_futures: Vec<_> = projects
+        .iter()
+        .map(|project| {
+            let client = client.clone();
+            let mut project_creds = creds.clone();
+            project_creds.project_id = project.project_id.clone();
+            let project_id = project.project_id.clone();
+            let project_name = project.name.clone();
+
+            async move {
+                match analyse(&client, &project_creds).await {
+                    Ok(mut findings) => {
+                        for f in &mut findings {
+                            f.account_id = Some(project_id.clone());
+                            f.account_name = Some(project_name.clone());
+                        }
+                        (project_id, Some(findings))
+                    }
+                    Err(_) => (project_id, None),
+                }
+            }
+        })
+        .collect();
+
+    let results = futures::future::join_all(scan_futures).await;
+
+    let mut all_findings: Vec<WasteItem> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
+    let mut scanned = 0usize;
+
+    for (project_id, findings) in results {
+        match findings {
+            Some(f) => {
+                scanned += 1;
+                all_findings.extend(f);
+            }
+            None => skipped.push(project_id),
+        }
+    }
+
+    all_findings.sort_by(|a, b| {
+        b.estimated_monthly_usd
+            .partial_cmp(&a.estimated_monthly_usd)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let total_waste: f64 = all_findings.iter().map(|f| f.estimated_monthly_usd).sum();
+    let coverage_note = if !skipped.is_empty() {
+        Some(format!(
+            "{} project(s) skipped — ensure the service account has viewer roles in all projects",
+            skipped.len()
+        ))
+    } else {
+        None
+    };
+
+    Ok(OrgWasteReport {
+        total_accounts,
+        scanned_accounts: scanned,
+        skipped_account_ids: skipped,
+        total_estimated_monthly_waste_usd: total_waste,
+        finding_count: all_findings.len(),
+        findings: all_findings,
+        coverage_note,
+    })
 }
