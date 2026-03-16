@@ -67,6 +67,190 @@ async fn list_instances(http: &Client, token: &str, project: &str) -> Result<Vec
     Ok(out)
 }
 
+// ── Persistent Disks ─────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct GcpDisk {
+    pub name: String,
+    pub id: String,
+    pub size_gb: u64,
+    pub disk_type: String, // "pd-standard", "pd-ssd", "pd-balanced"
+    pub status: String,    // "READY", "CREATING", etc.
+    pub zone: String,
+    pub region: String,
+    /// True if attached to at least one instance.
+    pub attached: bool,
+}
+
+pub async fn list_disks(http: &Client, token: &str, project: &str) -> Result<Vec<GcpDisk>> {
+    let url = format!(
+        "https://compute.googleapis.com/compute/v1/projects/{project}/aggregatedList/disks?maxResults=500"
+    );
+    let resp = http.get(&url).bearer_auth(token).send().await?;
+    if !resp.status().is_success() {
+        return Ok(Vec::new());
+    }
+    let data: Value = resp.json().await?;
+    let mut out = Vec::new();
+
+    for (zone_key, zone_data) in data["items"].as_object().cloned().unwrap_or_default() {
+        let zone = zone_key.rsplit('/').next().unwrap_or("").to_string();
+        let region = zone.rsplitn(2, '-').nth(1).unwrap_or("").to_string();
+
+        for disk in zone_data["disks"].as_array().cloned().unwrap_or_default() {
+            let name = disk["name"].as_str().unwrap_or("").to_string();
+            let id = disk["id"].as_str().unwrap_or("").to_string();
+            let size_gb = disk["sizeGb"].as_str().and_then(|s| s.parse().ok()).unwrap_or(0);
+            let disk_type = disk["type"]
+                .as_str()
+                .and_then(|t| t.rsplit('/').next())
+                .unwrap_or("pd-standard")
+                .to_string();
+            let status = disk["status"].as_str().unwrap_or("").to_string();
+            let attached = disk["users"].as_array().map(|a| !a.is_empty()).unwrap_or(false);
+
+            out.push(GcpDisk {
+                name, id, size_gb, disk_type, status, zone: zone.clone(), region: region.clone(), attached,
+            });
+        }
+    }
+    Ok(out)
+}
+
+// ── Static IPs (Addresses) ──────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct GcpAddress {
+    pub name: String,
+    pub address: String,
+    pub status: String, // "RESERVED" = unattached, "IN_USE" = attached
+    pub region: String,
+    pub address_type: String, // "EXTERNAL", "INTERNAL"
+}
+
+pub async fn list_addresses(http: &Client, token: &str, project: &str) -> Result<Vec<GcpAddress>> {
+    let url = format!(
+        "https://compute.googleapis.com/compute/v1/projects/{project}/aggregatedList/addresses?maxResults=500"
+    );
+    let resp = http.get(&url).bearer_auth(token).send().await?;
+    if !resp.status().is_success() {
+        return Ok(Vec::new());
+    }
+    let data: Value = resp.json().await?;
+    let mut out = Vec::new();
+
+    for (_key, region_data) in data["items"].as_object().cloned().unwrap_or_default() {
+        for addr in region_data["addresses"].as_array().cloned().unwrap_or_default() {
+            let name = addr["name"].as_str().unwrap_or("").to_string();
+            let address = addr["address"].as_str().unwrap_or("").to_string();
+            let status = addr["status"].as_str().unwrap_or("").to_string();
+            let region = addr["region"]
+                .as_str()
+                .and_then(|r| r.rsplit('/').next())
+                .unwrap_or("")
+                .to_string();
+            let addr_type = addr["addressType"].as_str().unwrap_or("EXTERNAL").to_string();
+
+            out.push(GcpAddress {
+                name, address, status, region, address_type: addr_type,
+            });
+        }
+    }
+    Ok(out)
+}
+
+// ── Snapshots ───────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct GcpSnapshot {
+    pub name: String,
+    pub id: String,
+    pub disk_size_gb: u64,
+    pub storage_bytes: u64,
+    pub status: String,
+    pub creation_timestamp: Option<String>,
+    pub source_disk: String,
+    /// Whether the source disk still exists.
+    pub source_disk_exists: bool,
+}
+
+pub async fn list_snapshots(http: &Client, token: &str, project: &str) -> Result<Vec<GcpSnapshot>> {
+    let url = format!(
+        "https://compute.googleapis.com/compute/v1/projects/{project}/global/snapshots?maxResults=500"
+    );
+    let resp = http.get(&url).bearer_auth(token).send().await?;
+    if !resp.status().is_success() {
+        return Ok(Vec::new());
+    }
+    let data: Value = resp.json().await?;
+
+    Ok(data["items"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|s| {
+            let name = s["name"].as_str()?.to_string();
+            let id = s["id"].as_str().unwrap_or("").to_string();
+            let disk_size = s["diskSizeGb"].as_str().and_then(|v| v.parse().ok()).unwrap_or(0);
+            let storage = s["storageBytes"].as_str().and_then(|v| v.parse().ok()).unwrap_or(0);
+            let status = s["status"].as_str().unwrap_or("").to_string();
+            let created = s["creationTimestamp"].as_str().map(String::from);
+            let source = s["sourceDisk"].as_str().unwrap_or("").to_string();
+
+            Some(GcpSnapshot {
+                name, id, disk_size_gb: disk_size, storage_bytes: storage,
+                status, creation_timestamp: created, source_disk: source,
+                source_disk_exists: true, // will be set correctly by the analyzer
+            })
+        })
+        .collect())
+}
+
+// ── Forwarding Rules (Load Balancers) ────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct GcpForwardingRule {
+    pub name: String,
+    pub region: String,
+    pub ip_address: String,
+    pub target: String,     // target pool or proxy URL
+    pub load_balancing_scheme: String,
+}
+
+pub async fn list_forwarding_rules(http: &Client, token: &str, project: &str) -> Result<Vec<GcpForwardingRule>> {
+    let url = format!(
+        "https://compute.googleapis.com/compute/v1/projects/{project}/aggregatedList/forwardingRules?maxResults=500"
+    );
+    let resp = http.get(&url).bearer_auth(token).send().await?;
+    if !resp.status().is_success() {
+        return Ok(Vec::new());
+    }
+    let data: Value = resp.json().await?;
+    let mut out = Vec::new();
+
+    for (_key, region_data) in data["items"].as_object().cloned().unwrap_or_default() {
+        for rule in region_data["forwardingRules"].as_array().cloned().unwrap_or_default() {
+            let name = rule["name"].as_str().unwrap_or("").to_string();
+            let region = rule["region"]
+                .as_str()
+                .and_then(|r| r.rsplit('/').next())
+                .unwrap_or("")
+                .to_string();
+            let ip = rule["IPAddress"].as_str().unwrap_or("").to_string();
+            let target = rule["target"].as_str().unwrap_or("").to_string();
+            let scheme = rule["loadBalancingScheme"].as_str().unwrap_or("").to_string();
+
+            out.push(GcpForwardingRule {
+                name, region, ip_address: ip, target, load_balancing_scheme: scheme,
+            });
+        }
+    }
+    Ok(out)
+}
+
+// ── Idle Recommendations (legacy — now superseded by recommender.rs) ────────
+
 async fn idle_recommendations(
     http: &Client,
     token: &str,

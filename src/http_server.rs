@@ -4,7 +4,7 @@ use chrono::{Duration as ChronoDuration, NaiveDate};
 use serde::Deserialize;
 use std::sync::Arc;
 
-use crate::analyzers::{waste, WasteItem}; // OrgWasteReport serialised via serde_json::to_value
+use crate::analyzers::{gcp_waste, waste, WasteItem}; // OrgWasteReport serialised via serde_json::to_value
 use crate::clouds::aws::{auth::assume_role, ce, organizations};
 use crate::clouds::cloudflare::{auth::CloudflareCreds, billing as cf_billing, workers};
 use crate::clouds::gcp::{auth::GcpCreds, billing as gcp_billing, compute};
@@ -92,6 +92,7 @@ pub async fn serve(port: u16) -> anyhow::Result<()> {
         // GCP
         .route("/gcp/costs", post(gcp_costs))
         .route("/gcp/resources", post(gcp_resources))
+        .route("/gcp/waste", post(gcp_waste))
         // Cloudflare
         .route("/cloudflare/costs", post(cf_costs))
         .route("/cloudflare/resources", post(cf_resources))
@@ -186,6 +187,13 @@ async fn gcp_resources(
     Json(req): Json<GcpRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
     handle!(do_gcp_resources(&s.http, req).await)
+}
+
+async fn gcp_waste(
+    State(s): State<Arc<AppState>>,
+    Json(req): Json<GcpRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    handle!(do_gcp_waste(&s.http, req).await)
 }
 
 async fn cf_costs(
@@ -365,6 +373,24 @@ async fn do_gcp_resources(
         .map(|r| resource_json(r.provider, &r.resource_id, r.resource_type, r.region, r.name, None, r.monthly_cost_estimate, r.last_active_at, r.raw))
         .collect();
     Ok(serde_json::json!({ "total_count": json.len(), "resources": json }))
+}
+
+async fn do_gcp_waste(
+    http: &reqwest::Client,
+    req: GcpRequest,
+) -> anyhow::Result<serde_json::Value> {
+    let creds = GcpCreds {
+        service_account_json: req.service_account_json,
+        project_id: req.project_id,
+        billing_account_id: req.billing_account_id,
+    };
+    let findings: Vec<WasteItem> = gcp_waste::analyse(http, &creds).await?;
+    let total: f64 = findings.iter().map(|f| f.estimated_monthly_usd).sum();
+    Ok(serde_json::json!({
+        "total_estimated_monthly_waste_usd": round2(total),
+        "finding_count": findings.len(),
+        "findings": findings,
+    }))
 }
 
 async fn do_cf_costs(

@@ -1,4 +1,10 @@
 pub mod auth;
 pub mod billing;
+pub mod cloud_functions;
+pub mod cloud_run;
+pub mod cloud_sql;
 pub mod compute;
+pub mod gke;
 pub mod monitoring;
+pub mod recommender;
+pub mod storage;

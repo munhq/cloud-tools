@@ -109,6 +109,29 @@ pub enum WasteKind {
     ComputeOptimizerRightsizing,
     /// ECS service with 0 running tasks
     IdleEcsService,
+    // ── GCP-specific variants ──────────────────────────────────────────────
+    /// GCE instance stopped for > 7 days (still incurs disk costs)
+    StoppedGceInstance,
+    /// Orphaned persistent disk — not attached to any instance
+    OrphanedPersistentDisk,
+    /// Static external IP not attached to any resource ($0.01/hr = ~$7.30/mo)
+    UnattachedStaticIp,
+    /// GCP stale snapshot (> 90 days old)
+    StaleGcpSnapshot,
+    /// Cloud SQL instance idle (< 5% CPU over 14 days)
+    IdleCloudSql,
+    /// Cloud SQL instance oversized (< 20% CPU)
+    OversizedCloudSql,
+    /// GKE cluster with 0 workloads or near-zero node utilisation
+    IdleGkeCluster,
+    /// Cloud Function with 0 invocations in 30 days
+    IdleCloudFunction,
+    /// Cloud Run service with 0 requests in 30 days
+    IdleCloudRunService,
+    /// GCS bucket without lifecycle rules — objects stored indefinitely
+    NoGcsLifecyclePolicy,
+    /// GCP Recommender API finding (idle, rightsizing, etc.)
+    GcpRecommenderFinding,
 }
 
 /// Thresholds for idle/oversized detection (validated against kosty + aws-finops-dashboard).
