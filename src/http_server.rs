@@ -4,13 +4,13 @@ use chrono::{Duration as ChronoDuration, NaiveDate};
 use serde::Deserialize;
 use std::sync::Arc;
 
-use cloud_tools::analyzers::{waste, WasteItem}; // OrgWasteReport serialised via serde_json::to_value
-use cloud_tools::clouds::aws::{auth::assume_role, ce, organizations};
-use cloud_tools::clouds::cloudflare::{auth::CloudflareCreds, billing as cf_billing, workers};
-use cloud_tools::clouds::gcp::{auth::GcpCreds, billing as gcp_billing, compute};
-use cloud_tools::clouds::ovh::{auth::OvhCreds, billing as ovh_billing, instances};
-use cloud_tools::setup::aws as aws_setup;
-use cloud_tools::types::CostEntry;
+use crate::analyzers::{waste, WasteItem}; // OrgWasteReport serialised via serde_json::to_value
+use crate::clouds::aws::{auth::assume_role, ce, organizations};
+use crate::clouds::cloudflare::{auth::CloudflareCreds, billing as cf_billing, workers};
+use crate::clouds::gcp::{auth::GcpCreds, billing as gcp_billing, compute};
+use crate::clouds::ovh::{auth::OvhCreds, billing as ovh_billing, instances};
+use crate::setup::aws as aws_setup;
+use crate::types::CostEntry;
 
 #[derive(Clone)]
 struct AppState {

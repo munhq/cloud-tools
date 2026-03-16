@@ -1,9 +1,5 @@
 use anyhow::Result;
-use cloud_tools::tools::CloudTools;
-use rmcp::ServiceExt;
 use tracing_subscriber::EnvFilter;
-
-mod http_server;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -20,9 +16,12 @@ async fn main() -> Result<()> {
                 .ok()
                 .and_then(|p| p.parse().ok())
                 .unwrap_or(9091);
-            http_server::serve(port).await?;
+            cloud_tools::http_server::serve(port).await?;
         }
         _ => {
+            use cloud_tools::tools::CloudTools;
+            use rmcp::ServiceExt;
+
             tracing::info!("cloud-tools MCP server starting on stdio");
             CloudTools::new()
                 .serve(rmcp::transport::stdio())
