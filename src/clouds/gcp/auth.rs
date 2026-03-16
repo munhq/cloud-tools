@@ -9,6 +9,12 @@ pub struct GcpCreds {
     pub service_account_json: String,
     pub project_id: String,
     pub billing_account_id: String,
+    /// Optional: fully qualified BigQuery table for billing export.
+    /// Format: `project.dataset.table` (e.g. `my-project.billing.gcp_billing_export_v1_XXXX`).
+    /// When set, enables real cost breakdown by service (equivalent to AWS Cost Explorer).
+    pub billing_table: Option<String>,
+    /// Optional: GCP organization ID for multi-project scanning.
+    pub organization_id: Option<String>,
 }
 
 #[derive(Deserialize)]
