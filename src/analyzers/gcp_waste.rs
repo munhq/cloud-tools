@@ -9,14 +9,18 @@ use chrono::{DateTime, Duration, Utc};
 
 use super::waste::{OrgWasteReport, WasteItem, WasteKind};
 use crate::clouds::gcp::{
+    artifact_registry,
     auth::GcpCreds,
     cloud_functions,
+    cloud_ids,
     cloud_run,
     cloud_sql,
+    cloud_vpn,
     commitments,
     compute,
     gke,
     monitoring,
+    networking,
     recommender,
     resource_manager,
     storage,
@@ -93,27 +97,31 @@ fn pd_monthly_per_gb(disk_type: &str) -> f64 {
 pub async fn analyse(client: &reqwest::Client, creds: &GcpCreds) -> Result<Vec<WasteItem>> {
     let token = crate::clouds::gcp::auth::access_token(client, creds).await?;
 
-    // Fetch all inventory in parallel
+    // Fetch all inventory in parallel (nested joins to avoid tuple size limits)
     let (
-        disks_res,
-        addresses_res,
-        snapshots_res,
-        sql_res,
-        gke_res,
-        functions_res,
-        run_res,
-        buckets_res,
-        recommender_res,
+        (disks_res, addresses_res, snapshots_res, sql_res, gke_res, functions_res, run_res, buckets_res, recommender_res),
+        (ids_res, artifact_res, vpn_res),
     ) = tokio::join!(
-        compute::list_disks(client, &token, &creds.project_id),
-        compute::list_addresses(client, &token, &creds.project_id),
-        compute::list_snapshots(client, &token, &creds.project_id),
-        cloud_sql::list_instances(client, creds),
-        gke::list_clusters(client, creds),
-        cloud_functions::list_functions(client, creds),
-        cloud_run::list_services(client, creds),
-        storage::list_buckets(client, creds),
-        recommender::get_recommendations(client, creds),
+        async {
+            tokio::join!(
+                compute::list_disks(client, &token, &creds.project_id),
+                compute::list_addresses(client, &token, &creds.project_id),
+                compute::list_snapshots(client, &token, &creds.project_id),
+                cloud_sql::list_instances(client, creds),
+                gke::list_clusters(client, creds),
+                cloud_functions::list_functions(client, creds),
+                cloud_run::list_services(client, creds),
+                storage::list_buckets(client, creds),
+                recommender::get_recommendations(client, creds),
+            )
+        },
+        async {
+            tokio::join!(
+                cloud_ids::list_ids_endpoints(client, creds),
+                artifact_registry::list_artifact_repos(client, creds),
+                cloud_vpn::list_vpn_gateways(client, creds),
+            )
+        },
     );
 
     let disks = disks_res.unwrap_or_default();
@@ -125,6 +133,9 @@ pub async fn analyse(client: &reqwest::Client, creds: &GcpCreds) -> Result<Vec<W
     let run_services = run_res.unwrap_or_default();
     let buckets = buckets_res.unwrap_or_default();
     let recommendations = recommender_res.unwrap_or_default();
+    let ids_endpoints = ids_res.unwrap_or_default();
+    let artifact_repos = artifact_res.unwrap_or_default();
+    let vpn_gateways = vpn_res.unwrap_or_default();
 
     let mut findings: Vec<WasteItem> = Vec::new();
 
@@ -535,6 +546,142 @@ pub async fn analyse(client: &reqwest::Client, creds: &GcpCreds) -> Result<Vec<W
             account_id: None,
             account_name: None,
         });
+    }
+
+    // ── Cloud IDS — $390/mo per endpoint, always flag as expensive ─────
+
+    for endpoint in &ids_endpoints {
+        if endpoint.state == "ACTIVE" {
+            findings.push(WasteItem {
+                resource_id: endpoint.name.clone(),
+                resource_type: "cloud_ids_endpoint".into(),
+                region: endpoint.region.clone(),
+                issue: WasteKind::CloudIdsEndpoint,
+                detail: format!(
+                    "Cloud IDS endpoint '{}' on network {} — $390/mo (Palo Alto managed firewall)",
+                    endpoint.name, endpoint.network,
+                ),
+                estimated_monthly_usd: 390.0,
+                action: "Evaluate if Cloud IDS is needed. Consider GKE network policies or Cloud Armor as cheaper alternatives.".into(),
+                account_id: None,
+                account_name: None,
+            });
+        }
+    }
+
+    // ── Artifact Registry — flag repos with no cleanup policy ────────
+
+    for repo in &artifact_repos {
+        let size_gb = repo.size_bytes as f64 / 1e9;
+        let monthly_cost = size_gb * 0.10;
+
+        if repo.cleanup_policy_count == 0 && size_gb > 1.0 {
+            findings.push(WasteItem {
+                resource_id: format!("{}/{}", repo.location, repo.name),
+                resource_type: "artifact_registry".into(),
+                region: repo.location.clone(),
+                issue: WasteKind::NoArtifactRegistryCleanup,
+                detail: format!(
+                    "Artifact Registry '{}' ({:.1}GB, {} format) has no cleanup policy — storage grows unbounded",
+                    repo.name, size_gb, repo.format,
+                ),
+                estimated_monthly_usd: monthly_cost,
+                action: "Add a cleanup policy to keep only N most recent tags per image. Storage cost: $0.10/GB/mo.".into(),
+                account_id: None,
+                account_name: None,
+            });
+        } else if size_gb > 100.0 {
+            findings.push(WasteItem {
+                resource_id: format!("{}/{}", repo.location, repo.name),
+                resource_type: "artifact_registry".into(),
+                region: repo.location.clone(),
+                issue: WasteKind::LargeArtifactRegistry,
+                detail: format!(
+                    "Artifact Registry '{}' is {:.1}GB ({} cleanup policies) — ${:.0}/mo",
+                    repo.name, size_gb, repo.cleanup_policy_count, monthly_cost,
+                ),
+                estimated_monthly_usd: monthly_cost,
+                action: format!(
+                    "Review cleanup policies. Current cost: ${:.0}/mo. Consider more aggressive tag retention.",
+                    monthly_cost,
+                ),
+                account_id: None,
+                account_name: None,
+            });
+        }
+    }
+
+    // ── Cloud Logging cost estimation ────────────────────────────────
+
+    if let Ok(bytes) = monitoring::logging_bytes_ingested(client, creds, 30).await {
+        let gib = bytes as f64 / 1_073_741_824.0;
+        let monthly_cost = gib * 0.50; // $0.50/GiB
+        if monthly_cost > 10.0 {
+            // Only flag if >$10/mo
+            findings.push(WasteItem {
+                resource_id: format!("{}/logging", creds.project_id),
+                resource_type: "cloud_logging".into(),
+                region: String::new(),
+                issue: WasteKind::HighLoggingIngestion,
+                detail: format!(
+                    "Cloud Logging ingested {:.1} GiB in 30 days — ~${:.0}/mo",
+                    gib, monthly_cost,
+                ),
+                estimated_monthly_usd: monthly_cost,
+                action: "Add log exclusion filters (e.g. exclude GKE container logs below WARNING). Review log router sinks.".into(),
+                account_id: None,
+                account_name: None,
+            });
+        }
+    }
+
+    // ── VPC Flow Logs — flag 100% sampling ───────────────────────────
+
+    if let Ok(subnets) = networking::list_subnetworks(client, creds).await {
+        for subnet in &subnets {
+            if subnet.flow_logs_enabled && subnet.flow_sampling >= 1.0 {
+                // Rough estimate: $0.50/GB for flow log data, varies heavily by traffic
+                let estimated = 12.50; // ~$12.50/mo per subnet at 100% sampling (conservative)
+                findings.push(WasteItem {
+                    resource_id: format!("{}/{}", subnet.region, subnet.name),
+                    resource_type: "vpc_subnet".into(),
+                    region: subnet.region.clone(),
+                    issue: WasteKind::HighFlowLogSampling,
+                    detail: format!(
+                        "Subnet '{}' has VPC flow logs at {:.0}% sampling — 25-50% is usually sufficient",
+                        subnet.name, subnet.flow_sampling * 100.0,
+                    ),
+                    estimated_monthly_usd: estimated,
+                    action: "Reduce flow log sampling rate to 0.25-0.50 (25-50%). This provides sufficient visibility while reducing costs by 50-75%.".into(),
+                    account_id: None,
+                    account_name: None,
+                });
+            }
+        }
+    }
+
+    // ── VPN — flag idle gateways ─────────────────────────────────────
+
+    for vpn in &vpn_gateways {
+        let all_tunnels_down = vpn.tunnels.iter().all(|t| t.status != "ESTABLISHED");
+        if vpn.tunnel_count == 0 || all_tunnels_down {
+            findings.push(WasteItem {
+                resource_id: vpn.gateway_name.clone(),
+                resource_type: "cloud_vpn".into(),
+                region: vpn.region.clone(),
+                issue: WasteKind::IdleVpnGateway,
+                detail: format!(
+                    "VPN gateway '{}' has {} tunnels, {} established — ~$37/mo",
+                    vpn.gateway_name,
+                    vpn.tunnel_count,
+                    if all_tunnels_down { "none" } else { "all" },
+                ),
+                estimated_monthly_usd: 37.0,
+                action: "Delete VPN gateway if no longer needed.".into(),
+                account_id: None,
+                account_name: None,
+            });
+        }
     }
 
     // Sort by estimated cost descending

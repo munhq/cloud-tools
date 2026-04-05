@@ -132,6 +132,18 @@ pub enum WasteKind {
     NoGcsLifecyclePolicy,
     /// GCP Recommender API finding (idle, rightsizing, etc.)
     GcpRecommenderFinding,
+    /// Cloud IDS endpoint — $390/mo per endpoint, often unnecessary
+    CloudIdsEndpoint,
+    /// Artifact Registry with no cleanup policy — storage grows unbounded
+    NoArtifactRegistryCleanup,
+    /// Artifact Registry with large storage (>100GB)
+    LargeArtifactRegistry,
+    /// Cloud Logging high ingestion — no log exclusion filters
+    HighLoggingIngestion,
+    /// VPC Flow Logs at 100% sampling (sampling=1.0) — expensive, 25-50% is usually sufficient
+    HighFlowLogSampling,
+    /// VPN gateway with no active tunnels or all tunnels down
+    IdleVpnGateway,
 }
 
 /// Thresholds for idle/oversized detection (validated against kosty + aws-finops-dashboard).

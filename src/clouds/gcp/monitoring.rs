@@ -173,3 +173,64 @@ pub async fn cloud_sql_cpu_avg(
     }
     Ok(Some(values.iter().sum::<f64>() / values.len() as f64))
 }
+
+/// Get total Cloud Logging bytes ingested over the last `days` days.
+/// Uses the `logging.googleapis.com/byte_count` metric from Cloud Monitoring.
+/// Returns total bytes ingested (sum across all log types).
+pub async fn logging_bytes_ingested(
+    http: &Client,
+    creds: &GcpCreds,
+    days: u32,
+) -> Result<u64> {
+    let token = access_token(http, creds).await?;
+    let now = Utc::now();
+    let start = now - Duration::days(days as i64);
+
+    let start_str = start.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let end_str = now.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+
+    let alignment_period = format!("{}s", days as u64 * 86400);
+
+    let url = format!(
+        "https://monitoring.googleapis.com/v3/projects/{}/timeSeries",
+        creds.project_id
+    );
+
+    let resp = http
+        .get(&url)
+        .bearer_auth(&token)
+        .header("x-goog-user-project", &creds.project_id)
+        .query(&[
+            ("filter", "metric.type=\"logging.googleapis.com/byte_count\""),
+            ("interval.startTime", &start_str),
+            ("interval.endTime", &end_str),
+            ("aggregation.alignmentPeriod", &alignment_period),
+            ("aggregation.perSeriesAligner", "ALIGN_SUM"),
+            ("aggregation.crossSeriesReducer", "REDUCE_SUM"),
+        ])
+        .send()
+        .await?;
+
+    if !resp.status().is_success() {
+        // Return 0 on API errors (permission denied, API not enabled, etc.)
+        let _text = resp.text().await?;
+        return Ok(0);
+    }
+
+    let data: serde_json::Value = resp.json().await?;
+
+    let mut total: u64 = 0;
+    for series in data["timeSeries"].as_array().cloned().unwrap_or_default() {
+        for point in series["points"].as_array().cloned().unwrap_or_default() {
+            if let Some(v) = point["value"]["int64Value"].as_str() {
+                if let Ok(n) = v.parse::<u64>() {
+                    total = total.saturating_add(n);
+                }
+            } else if let Some(v) = point["value"]["doubleValue"].as_f64() {
+                total = total.saturating_add(v as u64);
+            }
+        }
+    }
+
+    Ok(total)
+}
