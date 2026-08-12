@@ -2,7 +2,7 @@
 
 Multi-cloud cost, inventory and waste analysis in Rust — exposed as an **MCP server** so an AI agent can query spend and waste directly, and as an **HTTP API** for everything else.
 
-It reports what you spend, and it reports what you waste: idle instances, oversized nodes, previous-generation hardware, unattached resources, and commitments you are not using.
+It reports spend and waste: idle instances, oversized nodes, previous-generation hardware, unattached resources, and commitments you are not using.
 
 ## Tools
 
@@ -13,7 +13,7 @@ Four tools, each spanning every configured cloud:
 | `cost` | What am I spending, broken down by service, region and account |
 | `waste` | What is idle, oversized, previous-generation or unattached |
 | `inventory` | What exists, across providers and accounts |
-| `metrics` | Utilisation behind the above, so the verdicts are evidence-based |
+| `metrics` | Utilisation data behind the cost and waste findings |
 
 ## Coverage
 
