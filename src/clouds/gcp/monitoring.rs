@@ -30,10 +30,7 @@ pub async fn get_metric(
 
     let period = "3600s";
 
-    let full_filter = format!(
-        "metric.type=\"{}\" AND {}",
-        metric_type, filter
-    );
+    let full_filter = format!("metric.type=\"{}\" AND {}", metric_type, filter);
 
     let url = format!(
         "https://monitoring.googleapis.com/v3/projects/{}/timeSeries",
@@ -91,12 +88,14 @@ pub async fn gce_cpu_avg(
         instance_id, zone
     );
     let values = get_metric(
-        http, creds,
+        http,
+        creds,
         "compute.googleapis.com/instance/cpu/utilization",
         &filter,
         days,
         "ALIGN_MEAN",
-    ).await?;
+    )
+    .await?;
 
     if values.is_empty() {
         return Ok(None);
@@ -116,12 +115,14 @@ pub async fn cloud_function_invocations(
         function_name
     );
     let values = get_metric(
-        http, creds,
+        http,
+        creds,
         "cloudfunctions.googleapis.com/function/execution_count",
         &filter,
         days,
         "ALIGN_SUM",
-    ).await?;
+    )
+    .await?;
 
     Ok(values.iter().sum::<f64>() as u64)
 }
@@ -138,12 +139,14 @@ pub async fn cloud_run_requests(
         service_name
     );
     let values = get_metric(
-        http, creds,
+        http,
+        creds,
         "run.googleapis.com/request_count",
         &filter,
         days,
         "ALIGN_SUM",
-    ).await?;
+    )
+    .await?;
 
     Ok(values.iter().sum::<f64>() as u64)
 }
@@ -161,12 +164,14 @@ pub async fn cloud_sql_cpu_avg(
         creds.project_id, instance_id
     );
     let values = get_metric(
-        http, creds,
+        http,
+        creds,
         "cloudsql.googleapis.com/database/cpu/utilization",
         &filter,
         days,
         "ALIGN_MEAN",
-    ).await?;
+    )
+    .await?;
 
     if values.is_empty() {
         return Ok(None);
@@ -177,11 +182,7 @@ pub async fn cloud_sql_cpu_avg(
 /// Get total Cloud Logging bytes ingested over the last `days` days.
 /// Uses the `logging.googleapis.com/byte_count` metric from Cloud Monitoring.
 /// Returns total bytes ingested (sum across all log types).
-pub async fn logging_bytes_ingested(
-    http: &Client,
-    creds: &GcpCreds,
-    days: u32,
-) -> Result<u64> {
+pub async fn logging_bytes_ingested(http: &Client, creds: &GcpCreds, days: u32) -> Result<u64> {
     let token = access_token(http, creds).await?;
     let now = Utc::now();
     let start = now - Duration::days(days as i64);
@@ -201,7 +202,10 @@ pub async fn logging_bytes_ingested(
         .bearer_auth(&token)
         .header("x-goog-user-project", &creds.project_id)
         .query(&[
-            ("filter", "metric.type=\"logging.googleapis.com/byte_count\""),
+            (
+                "filter",
+                "metric.type=\"logging.googleapis.com/byte_count\"",
+            ),
             ("interval.startTime", &start_str),
             ("interval.endTime", &end_str),
             ("aggregation.alignmentPeriod", &alignment_period),

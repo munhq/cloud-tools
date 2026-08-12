@@ -1,7 +1,11 @@
 use anyhow::{anyhow, Result};
 use futures::future::join_all;
 
-use super::{as_items, auth::{sign, AwsCreds}, cloudwatch, xml_to_value};
+use super::{
+    as_items,
+    auth::{sign, AwsCreds},
+    cloudwatch, xml_to_value,
+};
 
 const DDB_CONTENT_TYPE: &str = "application/x-amz-json-1.0";
 
@@ -28,17 +32,18 @@ pub struct DynamoTable {
 
 /// List all DynamoDB tables across all regions and enrich provisioned tables
 /// with 14-day CloudWatch consumption data.
-pub async fn list_tables(
-    client: &reqwest::Client,
-    creds: &AwsCreds,
-) -> Result<Vec<DynamoTable>> {
+pub async fn list_tables(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<DynamoTable>> {
     let regions = list_regions(client, creds).await?;
     let tasks: Vec<_> = regions
         .iter()
         .map(|r| list_in_region(client, creds, r))
         .collect();
     let results = join_all(tasks).await;
-    Ok(results.into_iter().filter_map(|r| r.ok()).flatten().collect())
+    Ok(results
+        .into_iter()
+        .filter_map(|r| r.ok())
+        .flatten()
+        .collect())
 }
 
 // ── Region discovery via EC2 DescribeRegions ──────────────────────────────────
@@ -46,14 +51,24 @@ pub async fn list_tables(
 async fn list_regions(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<String>> {
     let body = form_params_ec2(&[("Action", "DescribeRegions"), ("Version", "2016-11-15")]);
     let url = "https://ec2.us-east-1.amazonaws.com/";
-    let signed = sign(creds, "POST", url, &[("content-type", "application/x-www-form-urlencoded")], body.as_bytes(), "ec2")?;
-    let mut req = client.post(url)
+    let signed = sign(
+        creds,
+        "POST",
+        url,
+        &[("content-type", "application/x-www-form-urlencoded")],
+        body.as_bytes(),
+        "ec2",
+    )?;
+    let mut req = client
+        .post(url)
         .header("content-type", "application/x-www-form-urlencoded")
         .header("x-amz-date", &signed.x_amz_date)
         .header("x-amz-content-sha256", &signed.x_amz_content_sha256)
         .header("authorization", &signed.authorization)
         .body(body);
-    if let Some(t) = &signed.x_amz_security_token { req = req.header("x-amz-security-token", t); }
+    if let Some(t) = &signed.x_amz_security_token {
+        req = req.header("x-amz-security-token", t);
+    }
     let resp = req.send().await?;
     let xml = resp.text().await?;
     let v = xml_to_value(&xml)?;
@@ -73,16 +88,23 @@ async fn list_in_region(
     let names = list_table_names(client, creds, region).await?;
 
     // Describe each table and enrich provisioned ones with CloudWatch concurrently
-    let tasks: Vec<_> = names.iter().map(|name| {
-        let client = client.clone();
-        let creds = creds.clone();
-        let region = region.to_string();
-        let name = name.clone();
-        async move { describe_and_enrich(&client, &creds, &region, &name).await }
-    }).collect();
+    let tasks: Vec<_> = names
+        .iter()
+        .map(|name| {
+            let client = client.clone();
+            let creds = creds.clone();
+            let region = region.to_string();
+            let name = name.clone();
+            async move { describe_and_enrich(&client, &creds, &region, &name).await }
+        })
+        .collect();
 
     let results = join_all(tasks).await;
-    Ok(results.into_iter().filter_map(|r| r.ok()).flatten().collect())
+    Ok(results
+        .into_iter()
+        .filter_map(|r| r.ok())
+        .flatten()
+        .collect())
 }
 
 async fn list_table_names(
@@ -95,7 +117,9 @@ async fn list_table_names(
 
     loop {
         let body = match &last_name {
-            Some(n) => serde_json::json!({ "Limit": 100, "ExclusiveStartTableName": n }).to_string(),
+            Some(n) => {
+                serde_json::json!({ "Limit": 100, "ExclusiveStartTableName": n }).to_string()
+            }
             None => serde_json::json!({ "Limit": 100 }).to_string(),
         };
 
@@ -104,7 +128,11 @@ async fn list_table_names(
             .map_err(|e| anyhow!("DynamoDB ListTables parse error in {region}: {e}"))?;
 
         if let Some(table_names) = v["TableNames"].as_array() {
-            names.extend(table_names.iter().filter_map(|n| n.as_str().map(String::from)));
+            names.extend(
+                table_names
+                    .iter()
+                    .filter_map(|n| n.as_str().map(String::from)),
+            );
         }
 
         match v["LastEvaluatedTableName"].as_str() {
@@ -123,7 +151,14 @@ async fn describe_and_enrich(
     name: &str,
 ) -> Result<Option<DynamoTable>> {
     let body = serde_json::json!({ "TableName": name }).to_string();
-    let resp = ddb_call(client, creds, region, "DynamoDB_20120810.DescribeTable", &body).await?;
+    let resp = ddb_call(
+        client,
+        creds,
+        region,
+        "DynamoDB_20120810.DescribeTable",
+        &body,
+    )
+    .await?;
     let v: serde_json::Value = serde_json::from_str(&resp)
         .map_err(|e| anyhow!("DynamoDB DescribeTable parse error: {e}"))?;
 
@@ -146,9 +181,11 @@ async fn describe_and_enrich(
     }
 
     let provisioned_rcu = table["ProvisionedThroughput"]["ReadCapacityUnits"]
-        .as_u64().unwrap_or(0);
+        .as_u64()
+        .unwrap_or(0);
     let provisioned_wcu = table["ProvisionedThroughput"]["WriteCapacityUnits"]
-        .as_u64().unwrap_or(0);
+        .as_u64()
+        .unwrap_or(0);
 
     // Skip tables with 0 provisioned (shouldn't happen but guard against it)
     if provisioned_rcu == 0 && provisioned_wcu == 0 {
@@ -158,8 +195,26 @@ async fn describe_and_enrich(
     // Fetch CloudWatch consumption metrics concurrently
     let dims = [("TableName", name)];
     let (rcu_res, wcu_res) = futures::join!(
-        cloudwatch::get_metric_stat(client, creds, region, "AWS/DynamoDB", "ConsumedReadCapacityUnits", &dims, 14, "Sum"),
-        cloudwatch::get_metric_stat(client, creds, region, "AWS/DynamoDB", "ConsumedWriteCapacityUnits", &dims, 14, "Sum"),
+        cloudwatch::get_metric_stat(
+            client,
+            creds,
+            region,
+            "AWS/DynamoDB",
+            "ConsumedReadCapacityUnits",
+            &dims,
+            14,
+            "Sum"
+        ),
+        cloudwatch::get_metric_stat(
+            client,
+            creds,
+            region,
+            "AWS/DynamoDB",
+            "ConsumedWriteCapacityUnits",
+            &dims,
+            14,
+            "Sum"
+        ),
     );
 
     Ok(Some(DynamoTable {
@@ -183,34 +238,39 @@ async fn ddb_call(
     body: &str,
 ) -> Result<String> {
     let url = format!("https://dynamodb.{region}.amazonaws.com/");
-    let creds_for_region = AwsCreds { region: region.to_string(), ..creds.clone() };
+    let creds_for_region = AwsCreds {
+        region: region.to_string(),
+        ..creds.clone()
+    };
 
     let signed = sign(
         &creds_for_region,
         "POST",
         &url,
-        &[
-            ("content-type", DDB_CONTENT_TYPE),
-            ("x-amz-target", target),
-        ],
+        &[("content-type", DDB_CONTENT_TYPE), ("x-amz-target", target)],
         body.as_bytes(),
         "dynamodb",
     )?;
 
-    let mut req = client.post(&url)
+    let mut req = client
+        .post(&url)
         .header("content-type", DDB_CONTENT_TYPE)
         .header("x-amz-target", target)
         .header("x-amz-date", &signed.x_amz_date)
         .header("x-amz-content-sha256", &signed.x_amz_content_sha256)
         .header("authorization", &signed.authorization)
         .body(body.to_string());
-    if let Some(t) = &signed.x_amz_security_token { req = req.header("x-amz-security-token", t); }
+    if let Some(t) = &signed.x_amz_security_token {
+        req = req.header("x-amz-security-token", t);
+    }
 
     let resp = req.send().await?;
     let status = resp.status();
     let text = resp.text().await?;
     if !status.is_success() {
-        return Err(anyhow!("DynamoDB API error {status} in {region} [{target}]: {text}"));
+        return Err(anyhow!(
+            "DynamoDB API error {status} in {region} [{target}]: {text}"
+        ));
     }
     Ok(text)
 }

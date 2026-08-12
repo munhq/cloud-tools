@@ -48,7 +48,14 @@ pub(crate) fn xml_to_value(xml: &str) -> anyhow::Result<serde_json::Value> {
         Ok(serde_json::Value::Object(
             map.into_iter()
                 .map(|(k, mut v)| {
-                    (k, if v.len() == 1 { v.remove(0) } else { serde_json::Value::Array(v) })
+                    (
+                        k,
+                        if v.len() == 1 {
+                            v.remove(0)
+                        } else {
+                            serde_json::Value::Array(v)
+                        },
+                    )
                 })
                 .collect(),
         ))

@@ -7,7 +7,6 @@ use crate::clouds::aws::auth::assume_role;
 /// Role deployed in the customer's AWS management account.
 const ROLE_NAME: &str = "MunbotFinOpsRole";
 
-
 /// Management account CloudFormation template.
 /// Served at GET /setup/aws/cloudformation.yaml
 /// Deployed by the customer in their AWS MANAGEMENT account (org root).
@@ -293,11 +292,10 @@ pub async fn verify(http: &Client, management_account_id: &str) -> VerifyRespons
     match assume_role(http, &role_arn, Some(&external_id)).await {
         Ok(creds) => {
             // Try to enumerate org accounts to confirm org-level access
-            let org_account_count =
-                crate::clouds::aws::organizations::list_accounts(http, &creds)
-                    .await
-                    .ok()
-                    .map(|accounts| accounts.len());
+            let org_account_count = crate::clouds::aws::organizations::list_accounts(http, &creds)
+                .await
+                .ok()
+                .map(|accounts| accounts.len());
 
             VerifyResponse {
                 connected: true,

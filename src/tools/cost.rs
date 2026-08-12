@@ -1,51 +1,33 @@
 use anyhow::Result;
 use chrono::{NaiveDate, Utc};
 use rmcp::{
-    ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{ServerCapabilities, ServerInfo},
-    schemars, tool, tool_handler, tool_router,
+    schemars, tool, tool_handler, tool_router, ServerHandler,
 };
 use serde::Deserialize;
 
 use crate::analyzers::gcp_waste;
 use crate::clouds::aws::{auth::assume_role, ce};
 use crate::clouds::cloudflare::{
-    auth::CloudflareCreds,
-    billing as cf_billing,
-    certificates as cf_certs,
-    dns as cf_dns,
-    workers as cf_workers,
-    zones as cf_zones,
+    auth::CloudflareCreds, billing as cf_billing, certificates as cf_certs, dns as cf_dns,
+    workers as cf_workers, zones as cf_zones,
 };
 use crate::clouds::gcp::{
-    auth::GcpCreds,
-    artifact_registry,
-    cloud_functions,
-    cloud_ids,
-    cloud_nat,
-    cloud_run,
-    cloud_sql,
-    cloud_vpn,
-    compute,
-    gke,
-    monitoring,
-    networking,
-    recommender,
-    storage,
+    artifact_registry, auth::GcpCreds, cloud_functions, cloud_ids, cloud_nat, cloud_run, cloud_sql,
+    cloud_vpn, compute, gke, monitoring, networking, recommender, storage,
 };
 use crate::clouds::ovh::{
-    auth::OvhCreds,
-    billing as ovh_billing,
-    instances as ovh_instances,
-    services as ovh_services,
+    auth::OvhCreds, billing as ovh_billing, instances as ovh_instances, services as ovh_services,
 };
 use crate::tools::waste::{FindWasteInput, WasteTool};
 use crate::types::CostEntry;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct CompareAwsCostsInput {
-    #[schemars(description = "Customer's IAM Role ARN, e.g. arn:aws:iam::123456789:role/CloudToolsReadOnly")]
+    #[schemars(
+        description = "Customer's IAM Role ARN, e.g. arn:aws:iam::123456789:role/CloudToolsReadOnly"
+    )]
     pub role_arn: String,
     #[schemars(description = "Optional external ID from the role's trust policy")]
     pub external_id: Option<String>,
@@ -55,7 +37,9 @@ pub struct CompareAwsCostsInput {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct GetAwsCostsInput {
-    #[schemars(description = "Customer's IAM Role ARN, e.g. arn:aws:iam::123456789:role/CloudToolsReadOnly")]
+    #[schemars(
+        description = "Customer's IAM Role ARN, e.g. arn:aws:iam::123456789:role/CloudToolsReadOnly"
+    )]
     pub role_arn: String,
     #[schemars(description = "Optional external ID from the role's trust policy")]
     pub external_id: Option<String>,
@@ -69,17 +53,25 @@ pub struct GetAwsCostsInput {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct GetGcpInventoryInput {
-    #[schemars(description = "One or more GCP project IDs to scan, e.g. [\"my-project-dev\", \"my-project-prod\"]")]
+    #[schemars(
+        description = "One or more GCP project IDs to scan, e.g. [\"my-project-dev\", \"my-project-prod\"]"
+    )]
     pub project_ids: Vec<String>,
-    #[schemars(description = "Optional: service account JSON string. If omitted, uses Application Default Credentials (ADC) from gcloud auth.")]
+    #[schemars(
+        description = "Optional: service account JSON string. If omitted, uses Application Default Credentials (ADC) from gcloud auth."
+    )]
     pub service_account_json: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct FindGcpWasteInput {
-    #[schemars(description = "One or more GCP project IDs to analyse for waste, e.g. [\"my-project-dev\", \"my-project-prod\"]")]
+    #[schemars(
+        description = "One or more GCP project IDs to analyse for waste, e.g. [\"my-project-dev\", \"my-project-prod\"]"
+    )]
     pub project_ids: Vec<String>,
-    #[schemars(description = "Optional: service account JSON string. If omitted, uses Application Default Credentials (ADC) from gcloud auth.")]
+    #[schemars(
+        description = "Optional: service account JSON string. If omitted, uses Application Default Credentials (ADC) from gcloud auth."
+    )]
     pub service_account_json: Option<String>,
 }
 
@@ -87,7 +79,9 @@ pub struct FindGcpWasteInput {
 pub struct GetGcpRecommendationsInput {
     #[schemars(description = "One or more GCP project IDs to fetch recommendations for")]
     pub project_ids: Vec<String>,
-    #[schemars(description = "Optional: service account JSON string. If omitted, uses Application Default Credentials (ADC) from gcloud auth.")]
+    #[schemars(
+        description = "Optional: service account JSON string. If omitted, uses Application Default Credentials (ADC) from gcloud auth."
+    )]
     pub service_account_json: Option<String>,
 }
 
@@ -163,7 +157,9 @@ impl Default for CloudTools {
 
 #[tool_router]
 impl CloudTools {
-    #[tool(description = "Get AWS costs grouped by service for a date range. Returns total spend and per-service breakdown sorted by cost descending. Use for questions like 'what did we spend last week?' or 'which services cost the most?'")]
+    #[tool(
+        description = "Get AWS costs grouped by service for a date range. Returns total spend and per-service breakdown sorted by cost descending. Use for questions like 'what did we spend last week?' or 'which services cost the most?'"
+    )]
     async fn get_aws_costs(&self, Parameters(input): Parameters<GetAwsCostsInput>) -> String {
         match self.fetch_aws_costs(input).await {
             Ok(result) => result,
@@ -171,29 +167,46 @@ impl CloudTools {
         }
     }
 
-    #[tool(description = "Fair month-over-month cost comparison. Compares identical day windows (e.g. Mar 1-12 vs Feb 1-12) to avoid misleading partial-month deltas. Returns current vs previous period totals, percentage change, and per-service breakdown sorted by biggest movers.")]
-    async fn compare_aws_costs(&self, Parameters(input): Parameters<CompareAwsCostsInput>) -> String {
+    #[tool(
+        description = "Fair month-over-month cost comparison. Compares identical day windows (e.g. Mar 1-12 vs Feb 1-12) to avoid misleading partial-month deltas. Returns current vs previous period totals, percentage change, and per-service breakdown sorted by biggest movers."
+    )]
+    async fn compare_aws_costs(
+        &self,
+        Parameters(input): Parameters<CompareAwsCostsInput>,
+    ) -> String {
         match self.do_compare_costs(input).await {
             Ok(result) => result,
             Err(e) => format!(r#"{{"error": "{e}"}}"#),
         }
     }
 
-    #[tool(description = "Analyse an AWS account for waste and optimisation opportunities. Checks: idle/oversized EC2 (CPU metrics), stopped instances, orphaned EBS volumes, gp2→gp3 upgrades, unattached EIPs, previous-gen instance types, expiring Reserved Instances, unused AMIs (>90d), orphaned/stale EBS snapshots, unused key pairs, unused load balancers, idle NAT gateways (< 1 GB in 14 days), idle/zero-invocation Lambda functions, high Lambda error rates, idle/over-provisioned DynamoDB tables, S3 buckets without lifecycle policies, incomplete S3 multipart uploads, and CloudWatch log groups without retention. Returns findings sorted by estimated monthly savings.")]
+    #[tool(
+        description = "Analyse an AWS account for waste and optimisation opportunities. Checks: idle/oversized EC2 (CPU metrics), stopped instances, orphaned EBS volumes, gp2→gp3 upgrades, unattached EIPs, previous-gen instance types, expiring Reserved Instances, unused AMIs (>90d), orphaned/stale EBS snapshots, unused key pairs, unused load balancers, idle NAT gateways (< 1 GB in 14 days), idle/zero-invocation Lambda functions, high Lambda error rates, idle/over-provisioned DynamoDB tables, S3 buckets without lifecycle policies, incomplete S3 multipart uploads, and CloudWatch log groups without retention. Returns findings sorted by estimated monthly savings."
+    )]
     async fn find_aws_waste(&self, Parameters(input): Parameters<FindWasteInput>) -> String {
         WasteTool::new(self.http.clone()).run(input).await
     }
 
-    #[tool(description = "Break down AWS data transfer costs by usage type for the last 30 days. Identifies expensive internet egress, cross-AZ traffic, and inter-region transfer. Returns items sorted by cost descending with human-readable descriptions (e.g. 'Internet egress (us-east-1)', 'Cross-AZ transfer').")]
-    async fn get_aws_data_transfer(&self, Parameters(input): Parameters<CompareAwsCostsInput>) -> String {
+    #[tool(
+        description = "Break down AWS data transfer costs by usage type for the last 30 days. Identifies expensive internet egress, cross-AZ traffic, and inter-region transfer. Returns items sorted by cost descending with human-readable descriptions (e.g. 'Internet egress (us-east-1)', 'Cross-AZ transfer')."
+    )]
+    async fn get_aws_data_transfer(
+        &self,
+        Parameters(input): Parameters<CompareAwsCostsInput>,
+    ) -> String {
         match self.do_data_transfer(input).await {
             Ok(result) => result,
             Err(e) => format!(r#"{{"error": "{e}"}}"#),
         }
     }
 
-    #[tool(description = "Analyse AWS Savings Plans: existing SP utilisation (are you using what you committed to?), coverage percentage (what % of eligible spend is covered?), and CE purchase recommendations showing estimated monthly savings from buying Compute or EC2 Instance Savings Plans. Call from the management/payer account for org-wide recommendations.")]
-    async fn get_aws_savings_plans(&self, Parameters(input): Parameters<CompareAwsCostsInput>) -> String {
+    #[tool(
+        description = "Analyse AWS Savings Plans: existing SP utilisation (are you using what you committed to?), coverage percentage (what % of eligible spend is covered?), and CE purchase recommendations showing estimated monthly savings from buying Compute or EC2 Instance Savings Plans. Call from the management/payer account for org-wide recommendations."
+    )]
+    async fn get_aws_savings_plans(
+        &self,
+        Parameters(input): Parameters<CompareAwsCostsInput>,
+    ) -> String {
         match self.do_savings_plans(input).await {
             Ok(result) => result,
             Err(e) => format!(r#"{{"error": "{e}"}}"#),
@@ -202,15 +215,22 @@ impl CloudTools {
 
     // ── GCP tools ────────────────────────────────────────────────────────────
 
-    #[tool(description = "Full GCP resource inventory across one or more projects. Returns: GCE instances, persistent disks, static IPs/addresses, snapshots, forwarding rules (load balancers), GKE clusters with node pools and pricing estimates, Cloud SQL instances, Cloud Functions, Cloud Run services, GCS buckets, Cloud NAT gateways, Cloud IDS endpoints, Artifact Registry repos with storage costs, VPN gateways and tunnels, subnets with flow logs enabled, PSC endpoints, and Cloud Logging ingestion bytes with cost estimate. Includes per-project summary. Auth: uses Application Default Credentials unless service_account_json is provided.")]
-    async fn get_gcp_inventory(&self, Parameters(input): Parameters<GetGcpInventoryInput>) -> String {
+    #[tool(
+        description = "Full GCP resource inventory across one or more projects. Returns: GCE instances, persistent disks, static IPs/addresses, snapshots, forwarding rules (load balancers), GKE clusters with node pools and pricing estimates, Cloud SQL instances, Cloud Functions, Cloud Run services, GCS buckets, Cloud NAT gateways, Cloud IDS endpoints, Artifact Registry repos with storage costs, VPN gateways and tunnels, subnets with flow logs enabled, PSC endpoints, and Cloud Logging ingestion bytes with cost estimate. Includes per-project summary. Auth: uses Application Default Credentials unless service_account_json is provided."
+    )]
+    async fn get_gcp_inventory(
+        &self,
+        Parameters(input): Parameters<GetGcpInventoryInput>,
+    ) -> String {
         match self.fetch_gcp_inventory(input).await {
             Ok(result) => result,
             Err(e) => format!(r#"{{"error": "{e}"}}"#),
         }
     }
 
-    #[tool(description = "Analyse GCP projects for waste and optimisation opportunities. Checks: idle/oversized GCE instances (CPU metrics), stopped instances, orphaned persistent disks, unattached static IPs, old snapshots (>90d), idle Cloud SQL, idle GKE clusters (0 nodes), zero-invocation Cloud Functions/Cloud Run, GCS buckets without lifecycle policies, expiring committed use discounts, and Recommender API findings. Returns findings sorted by estimated monthly savings. Auth: uses ADC unless service_account_json is provided.")]
+    #[tool(
+        description = "Analyse GCP projects for waste and optimisation opportunities. Checks: idle/oversized GCE instances (CPU metrics), stopped instances, orphaned persistent disks, unattached static IPs, old snapshots (>90d), idle Cloud SQL, idle GKE clusters (0 nodes), zero-invocation Cloud Functions/Cloud Run, GCS buckets without lifecycle policies, expiring committed use discounts, and Recommender API findings. Returns findings sorted by estimated monthly savings. Auth: uses ADC unless service_account_json is provided."
+    )]
     async fn find_gcp_waste(&self, Parameters(input): Parameters<FindGcpWasteInput>) -> String {
         match self.do_find_gcp_waste(input).await {
             Ok(result) => result,
@@ -218,8 +238,13 @@ impl CloudTools {
         }
     }
 
-    #[tool(description = "Fetch GCP Recommender API suggestions across one or more projects. Queries: idle VM recommender, machine type rightsizing, idle persistent disks, idle static IPs, idle/oversized Cloud SQL. Scans all zones and regions in parallel. Returns active recommendations with estimated monthly savings. Auth: uses ADC unless service_account_json is provided.")]
-    async fn get_gcp_recommendations(&self, Parameters(input): Parameters<GetGcpRecommendationsInput>) -> String {
+    #[tool(
+        description = "Fetch GCP Recommender API suggestions across one or more projects. Queries: idle VM recommender, machine type rightsizing, idle persistent disks, idle static IPs, idle/oversized Cloud SQL. Scans all zones and regions in parallel. Returns active recommendations with estimated monthly savings. Auth: uses ADC unless service_account_json is provided."
+    )]
+    async fn get_gcp_recommendations(
+        &self,
+        Parameters(input): Parameters<GetGcpRecommendationsInput>,
+    ) -> String {
         match self.fetch_gcp_recommendations(input).await {
             Ok(result) => result,
             Err(e) => format!(r#"{{"error": "{e}"}}"#),
@@ -228,17 +253,23 @@ impl CloudTools {
 
     // ── OVH tools ────────────────────────────────────────────────────────────
 
-    #[tool(description = "Get OVH billing: recent invoices with amounts. Returns up to 6 most recent bills.")]
+    #[tool(
+        description = "Get OVH billing: recent invoices with amounts. Returns up to 6 most recent bills."
+    )]
     async fn get_ovh_costs(&self, Parameters(input): Parameters<OvhInput>) -> String {
         match self.fetch_ovh_costs(input).await {
-            Ok(r) => r, Err(e) => format!(r#"{{"error": "{e}"}}"#),
+            Ok(r) => r,
+            Err(e) => format!(r#"{{"error": "{e}"}}"#),
         }
     }
 
-    #[tool(description = "Get OVH inventory: cloud instances and all active services with renewal dates and monthly costs.")]
+    #[tool(
+        description = "Get OVH inventory: cloud instances and all active services with renewal dates and monthly costs."
+    )]
     async fn get_ovh_inventory(&self, Parameters(input): Parameters<OvhInput>) -> String {
         match self.fetch_ovh_inventory(input).await {
-            Ok(r) => r, Err(e) => format!(r#"{{"error": "{e}"}}"#),
+            Ok(r) => r,
+            Err(e) => format!(r#"{{"error": "{e}"}}"#),
         }
     }
 
@@ -247,23 +278,36 @@ impl CloudTools {
     #[tool(description = "Get Cloudflare billing: subscriptions with prices, and zone plan costs.")]
     async fn get_cloudflare_costs(&self, Parameters(input): Parameters<CloudflareInput>) -> String {
         match self.fetch_cf_costs(input).await {
-            Ok(r) => r, Err(e) => format!(r#"{{"error": "{e}"}}"#),
+            Ok(r) => r,
+            Err(e) => format!(r#"{{"error": "{e}"}}"#),
         }
     }
 
-    #[tool(description = "Get Cloudflare inventory: zones with plan/pricing, DNS records per zone (proxied vs dns-only counts), SSL certificates with hosts and expiry, and Workers with invocation counts.")]
-    async fn get_cloudflare_inventory(&self, Parameters(input): Parameters<CloudflareInput>) -> String {
+    #[tool(
+        description = "Get Cloudflare inventory: zones with plan/pricing, DNS records per zone (proxied vs dns-only counts), SSL certificates with hosts and expiry, and Workers with invocation counts."
+    )]
+    async fn get_cloudflare_inventory(
+        &self,
+        Parameters(input): Parameters<CloudflareInput>,
+    ) -> String {
         match self.fetch_cf_inventory(input).await {
-            Ok(r) => r, Err(e) => format!(r#"{{"error": "{e}"}}"#),
+            Ok(r) => r,
+            Err(e) => format!(r#"{{"error": "{e}"}}"#),
         }
     }
 
     // ── Cross-cloud summary ──────────────────────────────────────────────────
 
-    #[tool(description = "Combined cost and waste report across all cloud providers (GCP, OVH, Cloudflare). Aggregates inventory costs and waste findings into one JSON report with grand total. Pass credentials for each provider you want included — omit a provider's credentials to skip it.")]
-    async fn get_cross_cloud_summary(&self, Parameters(input): Parameters<CrossCloudSummaryInput>) -> String {
+    #[tool(
+        description = "Combined cost and waste report across all cloud providers (GCP, OVH, Cloudflare). Aggregates inventory costs and waste findings into one JSON report with grand total. Pass credentials for each provider you want included — omit a provider's credentials to skip it."
+    )]
+    async fn get_cross_cloud_summary(
+        &self,
+        Parameters(input): Parameters<CrossCloudSummaryInput>,
+    ) -> String {
         match self.fetch_cross_cloud_summary(input).await {
-            Ok(r) => r, Err(e) => format!(r#"{{"error": "{e}"}}"#),
+            Ok(r) => r,
+            Err(e) => format!(r#"{{"error": "{e}"}}"#),
         }
     }
 }
@@ -375,21 +419,8 @@ impl CloudTools {
                     fwd_rules_res,
                     clusters_res,
                 ),
-                (
-                    sql_res,
-                    functions_res,
-                    run_res,
-                    buckets_res,
-                    nat_res,
-                    ids_res,
-                ),
-                (
-                    artifact_res,
-                    vpn_res,
-                    subnets_res,
-                    psc_res,
-                    logging_bytes_res,
-                ),
+                (sql_res, functions_res, run_res, buckets_res, nat_res, ids_res),
+                (artifact_res, vpn_res, subnets_res, psc_res, logging_bytes_res),
             ) = tokio::join!(
                 async {
                     tokio::join!(
@@ -450,51 +481,59 @@ impl CloudTools {
             let disks: Vec<_> = disks_res
                 .unwrap_or_default()
                 .into_iter()
-                .map(|d| serde_json::json!({
-                    "name": d.name,
-                    "size_gb": d.size_gb,
-                    "type": d.disk_type,
-                    "status": d.status,
-                    "zone": d.zone,
-                    "attached": d.attached,
-                }))
+                .map(|d| {
+                    serde_json::json!({
+                        "name": d.name,
+                        "size_gb": d.size_gb,
+                        "type": d.disk_type,
+                        "status": d.status,
+                        "zone": d.zone,
+                        "attached": d.attached,
+                    })
+                })
                 .collect();
 
             let addresses: Vec<_> = addresses_res
                 .unwrap_or_default()
                 .into_iter()
-                .map(|a| serde_json::json!({
-                    "name": a.name,
-                    "address": a.address,
-                    "status": a.status,
-                    "region": a.region,
-                    "type": a.address_type,
-                }))
+                .map(|a| {
+                    serde_json::json!({
+                        "name": a.name,
+                        "address": a.address,
+                        "status": a.status,
+                        "region": a.region,
+                        "type": a.address_type,
+                    })
+                })
                 .collect();
 
             let snapshots: Vec<_> = snapshots_res
                 .unwrap_or_default()
                 .into_iter()
-                .map(|s| serde_json::json!({
-                    "name": s.name,
-                    "disk_size_gb": s.disk_size_gb,
-                    "storage_bytes": s.storage_bytes,
-                    "status": s.status,
-                    "created": s.creation_timestamp,
-                    "source_disk": s.source_disk,
-                }))
+                .map(|s| {
+                    serde_json::json!({
+                        "name": s.name,
+                        "disk_size_gb": s.disk_size_gb,
+                        "storage_bytes": s.storage_bytes,
+                        "status": s.status,
+                        "created": s.creation_timestamp,
+                        "source_disk": s.source_disk,
+                    })
+                })
                 .collect();
 
             let forwarding_rules: Vec<_> = fwd_rules_res
                 .unwrap_or_default()
                 .into_iter()
-                .map(|fr| serde_json::json!({
-                    "name": fr.name,
-                    "region": fr.region,
-                    "ip_address": fr.ip_address,
-                    "target": fr.target,
-                    "load_balancing_scheme": fr.load_balancing_scheme,
-                }))
+                .map(|fr| {
+                    serde_json::json!({
+                        "name": fr.name,
+                        "region": fr.region,
+                        "ip_address": fr.ip_address,
+                        "target": fr.target,
+                        "load_balancing_scheme": fr.load_balancing_scheme,
+                    })
+                })
                 .collect();
 
             // GKE clusters with pricing
@@ -531,75 +570,87 @@ impl CloudTools {
             let sql_instances: Vec<_> = sql_res
                 .unwrap_or_default()
                 .into_iter()
-                .map(|s| serde_json::json!({
-                    "name": s.name,
-                    "database_version": s.database_version,
-                    "tier": s.tier,
-                    "state": s.state,
-                    "region": s.region,
-                    "disk_size_gb": s.data_disk_size_gb,
-                    "disk_type": s.data_disk_type,
-                }))
+                .map(|s| {
+                    serde_json::json!({
+                        "name": s.name,
+                        "database_version": s.database_version,
+                        "tier": s.tier,
+                        "state": s.state,
+                        "region": s.region,
+                        "disk_size_gb": s.data_disk_size_gb,
+                        "disk_type": s.data_disk_type,
+                    })
+                })
                 .collect();
 
             let functions: Vec<_> = functions_res
                 .unwrap_or_default()
                 .into_iter()
-                .map(|f| serde_json::json!({
-                    "name": f.name,
-                    "runtime": f.runtime,
-                    "state": f.state,
-                    "region": f.region,
-                    "memory_mb": f.memory_mb,
-                }))
+                .map(|f| {
+                    serde_json::json!({
+                        "name": f.name,
+                        "runtime": f.runtime,
+                        "state": f.state,
+                        "region": f.region,
+                        "memory_mb": f.memory_mb,
+                    })
+                })
                 .collect();
 
             let run_services: Vec<_> = run_res
                 .unwrap_or_default()
                 .into_iter()
-                .map(|r| serde_json::json!({
-                    "name": r.name,
-                    "region": r.region,
-                    "uri": r.uri,
-                    "latest_revision": r.latest_ready_revision,
-                }))
+                .map(|r| {
+                    serde_json::json!({
+                        "name": r.name,
+                        "region": r.region,
+                        "uri": r.uri,
+                        "latest_revision": r.latest_ready_revision,
+                    })
+                })
                 .collect();
 
             let buckets: Vec<_> = buckets_res
                 .unwrap_or_default()
                 .into_iter()
-                .map(|b| serde_json::json!({
-                    "name": b.name,
-                    "location": b.location,
-                    "storage_class": b.storage_class,
-                    "has_lifecycle_rules": b.has_lifecycle_rules,
-                    "versioning": b.versioning_enabled,
-                }))
+                .map(|b| {
+                    serde_json::json!({
+                        "name": b.name,
+                        "location": b.location,
+                        "storage_class": b.storage_class,
+                        "has_lifecycle_rules": b.has_lifecycle_rules,
+                        "versioning": b.versioning_enabled,
+                    })
+                })
                 .collect();
 
             // New resource types
             let cloud_nat: Vec<_> = nat_res
                 .unwrap_or_default()
                 .into_iter()
-                .map(|n| serde_json::json!({
-                    "name": n.name,
-                    "router_name": n.router_name,
-                    "region": n.region,
-                    "source_ranges": n.source_ranges,
-                    "nat_ips": n.nat_ips,
-                }))
+                .map(|n| {
+                    serde_json::json!({
+                        "name": n.name,
+                        "router_name": n.router_name,
+                        "region": n.region,
+                        "source_ranges": n.source_ranges,
+                        "nat_ips": n.nat_ips,
+                    })
+                })
                 .collect();
 
             let cloud_ids: Vec<_> = ids_res
                 .unwrap_or_default()
                 .into_iter()
-                .map(|e| serde_json::json!({
-                    "name": e.name,
-                    "network": e.network,
-                    "severity": e.severity,
-                    "state": e.state,
-                    "region": e.region,
-                }))
+                .map(|e| {
+                    serde_json::json!({
+                        "name": e.name,
+                        "network": e.network,
+                        "severity": e.severity,
+                        "state": e.state,
+                        "region": e.region,
+                    })
+                })
                 .collect();
 
             let artifact_registry: Vec<_> = artifact_res
@@ -622,12 +673,18 @@ impl CloudTools {
                 .unwrap_or_default()
                 .into_iter()
                 .map(|v| {
-                    let tunnels: Vec<_> = v.tunnels.iter().map(|t| serde_json::json!({
-                        "name": t.name,
-                        "status": t.status,
-                        "peer_ip": t.peer_ip,
-                        "ike_version": t.ike_version,
-                    })).collect();
+                    let tunnels: Vec<_> = v
+                        .tunnels
+                        .iter()
+                        .map(|t| {
+                            serde_json::json!({
+                                "name": t.name,
+                                "status": t.status,
+                                "peer_ip": t.peer_ip,
+                                "ike_version": t.ike_version,
+                            })
+                        })
+                        .collect();
                     serde_json::json!({
                         "gateway_name": v.gateway_name,
                         "region": v.region,
@@ -641,31 +698,36 @@ impl CloudTools {
                 .unwrap_or_default()
                 .into_iter()
                 .filter(|s| s.flow_logs_enabled)
-                .map(|s| serde_json::json!({
-                    "name": s.name,
-                    "region": s.region,
-                    "ip_cidr_range": s.ip_cidr_range,
-                    "flow_logs_enabled": s.flow_logs_enabled,
-                    "flow_sampling": s.flow_sampling,
-                    "purpose": s.purpose,
-                }))
+                .map(|s| {
+                    serde_json::json!({
+                        "name": s.name,
+                        "region": s.region,
+                        "ip_cidr_range": s.ip_cidr_range,
+                        "flow_logs_enabled": s.flow_logs_enabled,
+                        "flow_sampling": s.flow_sampling,
+                        "purpose": s.purpose,
+                    })
+                })
                 .collect();
 
             let psc_endpoints: Vec<_> = psc_res
                 .unwrap_or_default()
                 .into_iter()
-                .map(|p| serde_json::json!({
-                    "name": p.name,
-                    "region": p.region,
-                    "address": p.address,
-                    "target": p.target,
-                    "status": p.status,
-                }))
+                .map(|p| {
+                    serde_json::json!({
+                        "name": p.name,
+                        "region": p.region,
+                        "address": p.address,
+                        "target": p.target,
+                        "status": p.status,
+                    })
+                })
                 .collect();
 
             // Logging cost estimation
             let logging_bytes = logging_bytes_res.unwrap_or(0);
-            let logging_estimated_monthly_usd = round2(logging_bytes as f64 / 1_073_741_824.0 * 0.50);
+            let logging_estimated_monthly_usd =
+                round2(logging_bytes as f64 / 1_073_741_824.0 * 0.50);
 
             let summary = serde_json::json!({
                 "total_gke_clusters": total_gke_clusters,
@@ -835,27 +897,35 @@ impl CloudTools {
             ovh_services::list_services(&self.http, &creds),
         );
 
-        let instances: Vec<_> = instances_res.unwrap_or_default().into_iter().map(|r| {
-            serde_json::json!({
-                "name": r.name,
-                "id": r.resource_id,
-                "type": r.resource_type,
-                "region": r.region,
-                "status": if r.last_active_at.is_some() { "ACTIVE" } else { "INACTIVE" },
+        let instances: Vec<_> = instances_res
+            .unwrap_or_default()
+            .into_iter()
+            .map(|r| {
+                serde_json::json!({
+                    "name": r.name,
+                    "id": r.resource_id,
+                    "type": r.resource_type,
+                    "region": r.region,
+                    "status": if r.last_active_at.is_some() { "ACTIVE" } else { "INACTIVE" },
+                })
             })
-        }).collect();
+            .collect();
 
-        let services: Vec<_> = services_res.unwrap_or_default().into_iter().map(|s| {
-            serde_json::json!({
-                "service_id": s.service_id,
-                "type": s.service_type,
-                "name": s.display_name,
-                "status": s.status,
-                "expiration": s.expiration_date,
-                "renew": s.renew_type,
-                "monthly_cost": s.monthly_cost,
+        let services: Vec<_> = services_res
+            .unwrap_or_default()
+            .into_iter()
+            .map(|s| {
+                serde_json::json!({
+                    "service_id": s.service_id,
+                    "type": s.service_type,
+                    "name": s.display_name,
+                    "status": s.status,
+                    "expiration": s.expiration_date,
+                    "renew": s.renew_type,
+                    "monthly_cost": s.monthly_cost,
+                })
             })
-        }).collect();
+            .collect();
 
         let output = serde_json::json!({
             "provider": "ovh",
@@ -914,36 +984,50 @@ impl CloudTools {
             cf_workers::list_resources(&self.http, &creds),
         );
 
-        let zones: Vec<_> = zones_res.unwrap_or_default().into_iter().map(|z| {
-            serde_json::json!({
-                "name": z.name,
-                "status": z.status,
-                "plan": z.plan_name,
-                "plan_price_usd": z.plan_price,
-                "paused": z.paused,
+        let zones: Vec<_> = zones_res
+            .unwrap_or_default()
+            .into_iter()
+            .map(|z| {
+                serde_json::json!({
+                    "name": z.name,
+                    "status": z.status,
+                    "plan": z.plan_name,
+                    "plan_price_usd": z.plan_price,
+                    "paused": z.paused,
+                })
             })
-        }).collect();
+            .collect();
 
-        let dns: Vec<_> = dns_res.unwrap_or_default().into_iter().map(|d| {
-            serde_json::json!({
-                "zone": d.zone_name,
-                "total_records": d.total_records,
-                "proxied": d.proxied_count,
-                "dns_only": d.dns_only_count,
+        let dns: Vec<_> = dns_res
+            .unwrap_or_default()
+            .into_iter()
+            .map(|d| {
+                serde_json::json!({
+                    "zone": d.zone_name,
+                    "total_records": d.total_records,
+                    "proxied": d.proxied_count,
+                    "dns_only": d.dns_only_count,
+                })
             })
-        }).collect();
+            .collect();
 
-        let certs: Vec<_> = certs_res.unwrap_or_default().into_iter().map(|c| {
-            serde_json::json!({
-                "zone": c.zone_name,
-                "type": c.cert_type,
-                "status": c.status,
-                "hosts": c.hosts,
-                "expires": c.expires_on,
+        let certs: Vec<_> = certs_res
+            .unwrap_or_default()
+            .into_iter()
+            .map(|c| {
+                serde_json::json!({
+                    "zone": c.zone_name,
+                    "type": c.cert_type,
+                    "status": c.status,
+                    "hosts": c.hosts,
+                    "expires": c.expires_on,
+                })
             })
-        }).collect();
+            .collect();
 
-        let workers: Vec<_> = workers_res.unwrap_or_default().into_iter()
+        let workers: Vec<_> = workers_res
+            .unwrap_or_default()
+            .into_iter()
             .filter(|w| w.resource_type == "cf_worker")
             .map(|w| {
                 let requests = w.raw["sum"]["requests"].as_i64().unwrap_or(0);
@@ -952,7 +1036,8 @@ impl CloudTools {
                     "requests_30d": requests,
                     "active": w.last_active_at.is_some(),
                 })
-            }).collect();
+            })
+            .collect();
 
         let output = serde_json::json!({
             "provider": "cloudflare",
@@ -978,14 +1063,20 @@ impl CloudTools {
                     project_ids: project_ids.clone(),
                     service_account_json: input.gcp_service_account_json.clone(),
                 };
-                let waste_json = self.do_find_gcp_waste(waste_input).await
+                let waste_json = self
+                    .do_find_gcp_waste(waste_input)
+                    .await
                     .unwrap_or_else(|e| format!(r#"{{"error":"{e}"}}"#));
-                let waste: serde_json::Value = serde_json::from_str(&waste_json).unwrap_or_default();
+                let waste: serde_json::Value =
+                    serde_json::from_str(&waste_json).unwrap_or_default();
 
                 // Summarize waste findings by project
-                let waste_total = waste["total_estimated_monthly_waste_usd"].as_f64().unwrap_or(0.0);
+                let waste_total = waste["total_estimated_monthly_waste_usd"]
+                    .as_f64()
+                    .unwrap_or(0.0);
                 let finding_count = waste["finding_count"].as_u64().unwrap_or(0);
-                let mut by_project: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+                let mut by_project: std::collections::HashMap<String, f64> =
+                    std::collections::HashMap::new();
                 if let Some(findings) = waste["findings"].as_array() {
                     for f in findings {
                         let pid = f["account_id"].as_str().unwrap_or("unknown").to_string();
@@ -994,13 +1085,16 @@ impl CloudTools {
                     }
                 }
 
-                let project_summaries: Vec<_> = project_ids.iter().map(|pid| {
-                    let waste_usd = by_project.get(pid.as_str()).copied().unwrap_or(0.0);
-                    serde_json::json!({
-                        "project_id": pid,
-                        "waste_monthly_usd": round2(waste_usd),
+                let project_summaries: Vec<_> = project_ids
+                    .iter()
+                    .map(|pid| {
+                        let waste_usd = by_project.get(pid.as_str()).copied().unwrap_or(0.0);
+                        serde_json::json!({
+                            "project_id": pid,
+                            "waste_monthly_usd": round2(waste_usd),
+                        })
                     })
-                }).collect();
+                    .collect();
 
                 providers.push(serde_json::json!({
                     "provider": "gcp",
@@ -1012,17 +1106,26 @@ impl CloudTools {
         }
 
         // ── OVH ──
-        if let (Some(ref key), Some(ref secret), Some(ref ck)) =
-            (&input.ovh_app_key, &input.ovh_app_secret, &input.ovh_consumer_key)
-        {
+        if let (Some(ref key), Some(ref secret), Some(ref ck)) = (
+            &input.ovh_app_key,
+            &input.ovh_app_secret,
+            &input.ovh_consumer_key,
+        ) {
             let creds = OvhCreds {
                 app_key: key.clone(),
                 app_secret: secret.clone(),
                 consumer_key: ck.clone(),
-                endpoint: input.ovh_endpoint.clone().unwrap_or_else(|| "ovh-eu".into()),
+                endpoint: input
+                    .ovh_endpoint
+                    .clone()
+                    .unwrap_or_else(|| "ovh-eu".into()),
             };
-            let costs = ovh_billing::get_costs(&self.http, &creds).await.unwrap_or_default();
-            let services = ovh_services::list_services(&self.http, &creds).await.unwrap_or_default();
+            let costs = ovh_billing::get_costs(&self.http, &creds)
+                .await
+                .unwrap_or_default();
+            let services = ovh_services::list_services(&self.http, &creds)
+                .await
+                .unwrap_or_default();
             let total: f64 = costs.iter().map(|c| c.amount_usd).sum();
             let active = services.iter().filter(|s| s.status == "active").count();
 
@@ -1035,7 +1138,8 @@ impl CloudTools {
         }
 
         // ── Cloudflare ──
-        if let (Some(ref token), Some(ref account_id)) = (&input.cf_api_token, &input.cf_account_id) {
+        if let (Some(ref token), Some(ref account_id)) = (&input.cf_api_token, &input.cf_account_id)
+        {
             let creds = CloudflareCreds {
                 api_token: token.clone(),
                 account_id: account_id.clone(),
@@ -1059,12 +1163,15 @@ impl CloudTools {
         }
 
         // ── Grand total ──
-        let grand_total: f64 = providers.iter().filter_map(|p| {
-            p.get("waste_total_monthly_usd")
-                .or(p.get("total_billed_usd"))
-                .or(p.get("total_usd"))
-                .and_then(|v| v.as_f64())
-        }).sum();
+        let grand_total: f64 = providers
+            .iter()
+            .filter_map(|p| {
+                p.get("waste_total_monthly_usd")
+                    .or(p.get("total_billed_usd"))
+                    .or(p.get("total_usd"))
+                    .and_then(|v| v.as_f64())
+            })
+            .sum();
 
         let output = serde_json::json!({
             "summary": {

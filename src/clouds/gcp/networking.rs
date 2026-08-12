@@ -20,17 +20,13 @@ pub struct GcpSubnet {
 ///
 /// Note: `aggregatedList/subnetworks` does NOT exist in the GCP Compute API,
 /// so we must list regions first, then fetch subnets per region in parallel.
-pub async fn list_subnetworks(
-    http: &Client,
-    creds: &GcpCreds,
-) -> Result<Vec<GcpSubnet>> {
+pub async fn list_subnetworks(http: &Client, creds: &GcpCreds) -> Result<Vec<GcpSubnet>> {
     let token = access_token(http, creds).await?;
     let project = &creds.project_id;
 
     // List all regions
-    let regions_url = format!(
-        "https://compute.googleapis.com/compute/v1/projects/{project}/regions"
-    );
+    let regions_url =
+        format!("https://compute.googleapis.com/compute/v1/projects/{project}/regions");
     let resp = http.get(&regions_url).bearer_auth(&token).send().await?;
     if !resp.status().is_success() {
         return Ok(Vec::new());
@@ -108,7 +104,7 @@ pub struct PscEndpoint {
     pub name: String,
     pub region: String,
     pub address: String,
-    pub target: String,  // service attachment URL
+    pub target: String, // service attachment URL
     pub status: String,
 }
 
@@ -137,7 +133,11 @@ pub async fn list_psc_endpoints(
     if resp.status().is_success() {
         let data: Value = resp.json().await?;
         for (_scope_key, scope_data) in data["items"].as_object().cloned().unwrap_or_default() {
-            for rule in scope_data["forwardingRules"].as_array().cloned().unwrap_or_default() {
+            for rule in scope_data["forwardingRules"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+            {
                 if let Some(endpoint) = extract_psc_endpoint(&rule) {
                     out.push(endpoint);
                 }

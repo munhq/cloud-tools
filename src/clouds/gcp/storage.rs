@@ -8,16 +8,13 @@ use super::auth::{access_token, GcpCreds};
 #[derive(Debug, Clone)]
 pub struct GcsBucket {
     pub name: String,
-    pub location: String,         // e.g. "US", "EU", "us-central1"
-    pub storage_class: String,    // "STANDARD", "NEARLINE", "COLDLINE", "ARCHIVE"
+    pub location: String,      // e.g. "US", "EU", "us-central1"
+    pub storage_class: String, // "STANDARD", "NEARLINE", "COLDLINE", "ARCHIVE"
     pub has_lifecycle_rules: bool,
     pub versioning_enabled: bool,
 }
 
-pub async fn list_buckets(
-    http: &Client,
-    creds: &GcpCreds,
-) -> Result<Vec<GcsBucket>> {
+pub async fn list_buckets(http: &Client, creds: &GcpCreds) -> Result<Vec<GcsBucket>> {
     let token = access_token(http, creds).await?;
     let url = format!(
         "https://storage.googleapis.com/storage/v1/b?project={}",

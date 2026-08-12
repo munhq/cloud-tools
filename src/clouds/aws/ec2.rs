@@ -2,7 +2,11 @@ use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use futures::future::join_all;
 
-use super::{as_items, auth::{sign, AwsCreds}, az_to_region, xml_to_value};
+use super::{
+    as_items,
+    auth::{sign, AwsCreds},
+    az_to_region, xml_to_value,
+};
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -10,7 +14,7 @@ use super::{as_items, auth::{sign, AwsCreds}, az_to_region, xml_to_value};
 pub struct Ec2Instance {
     pub id: String,
     pub instance_type: String,
-    pub state: String,        // "running" | "stopped" | "pending" | etc.
+    pub state: String, // "running" | "stopped" | "pending" | etc.
     pub region: String,
     pub name: Option<String>,
     pub launch_time: Option<DateTime<Utc>>,
@@ -21,9 +25,9 @@ pub struct Ec2Instance {
 #[derive(Debug, Clone)]
 pub struct EbsVolume {
     pub id: String,
-    pub volume_type: String,  // "gp2" | "gp3" | "io1" | "st1" | "sc1" | "standard"
+    pub volume_type: String, // "gp2" | "gp3" | "io1" | "st1" | "sc1" | "standard"
     pub size_gb: u64,
-    pub state: String,        // "available" (unattached) | "in-use"
+    pub state: String, // "available" (unattached) | "in-use"
     pub region: String,
     pub name: Option<String>,
 }
@@ -39,9 +43,9 @@ pub struct Eip {
 #[derive(Debug, Clone)]
 pub struct EbsSnapshot {
     pub id: String,
-    pub volume_id: String,       // "" if source volume deleted
+    pub volume_id: String, // "" if source volume deleted
     pub volume_size_gb: u64,
-    pub state: String,           // "completed"
+    pub state: String, // "completed"
     pub start_time: Option<DateTime<Utc>>,
     pub region: String,
     pub name: Option<String>,
@@ -71,7 +75,7 @@ pub struct ReservedInstance {
     pub id: String,
     pub instance_type: String,
     pub instance_count: u32,
-    pub state: String,           // "active" | "retired"
+    pub state: String, // "active" | "retired"
     pub end_time: Option<DateTime<Utc>>,
     pub region: String,
     pub monthly_cost_usd: f64,
@@ -80,14 +84,21 @@ pub struct ReservedInstance {
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /// List all EC2 instances across all regions (running + stopped).
-pub async fn list_instances(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<Ec2Instance>> {
+pub async fn list_instances(
+    client: &reqwest::Client,
+    creds: &AwsCreds,
+) -> Result<Vec<Ec2Instance>> {
     let regions = list_regions(client, creds).await?;
     let tasks: Vec<_> = regions
         .iter()
         .map(|r| list_instances_in_region(client, creds, r))
         .collect();
     let results = join_all(tasks).await;
-    Ok(results.into_iter().filter_map(|r| r.ok()).flatten().collect())
+    Ok(results
+        .into_iter()
+        .filter_map(|r| r.ok())
+        .flatten()
+        .collect())
 }
 
 /// List all EBS volumes across all regions.
@@ -98,7 +109,11 @@ pub async fn list_volumes(client: &reqwest::Client, creds: &AwsCreds) -> Result<
         .map(|r| list_volumes_in_region(client, creds, r))
         .collect();
     let results = join_all(tasks).await;
-    Ok(results.into_iter().filter_map(|r| r.ok()).flatten().collect())
+    Ok(results
+        .into_iter()
+        .filter_map(|r| r.ok())
+        .flatten()
+        .collect())
 }
 
 /// List all Elastic IPs across all regions.
@@ -109,18 +124,29 @@ pub async fn list_eips(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec
         .map(|r| list_eips_in_region(client, creds, r))
         .collect();
     let results = join_all(tasks).await;
-    Ok(results.into_iter().filter_map(|r| r.ok()).flatten().collect())
+    Ok(results
+        .into_iter()
+        .filter_map(|r| r.ok())
+        .flatten()
+        .collect())
 }
 
 /// List all EBS snapshots owned by self across all regions.
-pub async fn list_snapshots(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<EbsSnapshot>> {
+pub async fn list_snapshots(
+    client: &reqwest::Client,
+    creds: &AwsCreds,
+) -> Result<Vec<EbsSnapshot>> {
     let regions = list_regions(client, creds).await?;
     let tasks: Vec<_> = regions
         .iter()
         .map(|r| list_snapshots_in_region(client, creds, r))
         .collect();
     let results = join_all(tasks).await;
-    Ok(results.into_iter().filter_map(|r| r.ok()).flatten().collect())
+    Ok(results
+        .into_iter()
+        .filter_map(|r| r.ok())
+        .flatten()
+        .collect())
 }
 
 /// List all AMIs owned by self across all regions.
@@ -131,7 +157,11 @@ pub async fn list_images(client: &reqwest::Client, creds: &AwsCreds) -> Result<V
         .map(|r| list_images_in_region(client, creds, r))
         .collect();
     let results = join_all(tasks).await;
-    Ok(results.into_iter().filter_map(|r| r.ok()).flatten().collect())
+    Ok(results
+        .into_iter()
+        .filter_map(|r| r.ok())
+        .flatten()
+        .collect())
 }
 
 /// List all key pairs across all regions.
@@ -142,27 +172,35 @@ pub async fn list_key_pairs(client: &reqwest::Client, creds: &AwsCreds) -> Resul
         .map(|r| list_key_pairs_in_region(client, creds, r))
         .collect();
     let results = join_all(tasks).await;
-    Ok(results.into_iter().filter_map(|r| r.ok()).flatten().collect())
+    Ok(results
+        .into_iter()
+        .filter_map(|r| r.ok())
+        .flatten()
+        .collect())
 }
 
 /// List all active reserved instances across all regions.
-pub async fn list_reserved_instances(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<ReservedInstance>> {
+pub async fn list_reserved_instances(
+    client: &reqwest::Client,
+    creds: &AwsCreds,
+) -> Result<Vec<ReservedInstance>> {
     let regions = list_regions(client, creds).await?;
     let tasks: Vec<_> = regions
         .iter()
         .map(|r| list_reserved_instances_in_region(client, creds, r))
         .collect();
     let results = join_all(tasks).await;
-    Ok(results.into_iter().filter_map(|r| r.ok()).flatten().collect())
+    Ok(results
+        .into_iter()
+        .filter_map(|r| r.ok())
+        .flatten()
+        .collect())
 }
 
 // ── Region discovery ──────────────────────────────────────────────────────────
 
 async fn list_regions(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<String>> {
-    let body = form_params(&[
-        ("Action", "DescribeRegions"),
-        ("Version", "2016-11-15"),
-    ]);
+    let body = form_params(&[("Action", "DescribeRegions"), ("Version", "2016-11-15")]);
     let xml = ec2_query(client, creds, "us-east-1", &body).await?;
     let v = xml_to_value(&xml)?;
     let regions = as_items(&v["regionInfo"]["item"])
@@ -225,10 +263,7 @@ async fn list_volumes_in_region(
     let mut next_token: Option<String> = None;
 
     loop {
-        let mut params = vec![
-            ("Action", "DescribeVolumes"),
-            ("Version", "2016-11-15"),
-        ];
+        let mut params = vec![("Action", "DescribeVolumes"), ("Version", "2016-11-15")];
         let token_owned;
         if let Some(ref t) = next_token {
             token_owned = t.clone();
@@ -263,10 +298,7 @@ async fn list_eips_in_region(
     creds: &AwsCreds,
     region: &str,
 ) -> Result<Vec<Eip>> {
-    let body = form_params(&[
-        ("Action", "DescribeAddresses"),
-        ("Version", "2016-11-15"),
-    ]);
+    let body = form_params(&[("Action", "DescribeAddresses"), ("Version", "2016-11-15")]);
     let xml = ec2_query(client, creds, region, &body).await?;
     let v = xml_to_value(&xml)?;
 
@@ -314,7 +346,11 @@ async fn list_snapshots_in_region(
             out.push(EbsSnapshot {
                 id: snap["snapshotId"].as_str().unwrap_or("").to_string(),
                 volume_id: snap["volumeId"].as_str().unwrap_or("").to_string(),
-                volume_size_gb: snap["volumeSize"].as_str().unwrap_or("0").parse().unwrap_or(0),
+                volume_size_gb: snap["volumeSize"]
+                    .as_str()
+                    .unwrap_or("0")
+                    .parse()
+                    .unwrap_or(0),
                 state: snap["status"].as_str().unwrap_or("unknown").to_string(),
                 start_time,
                 region: region.to_string(),
@@ -373,10 +409,7 @@ async fn list_key_pairs_in_region(
     creds: &AwsCreds,
     region: &str,
 ) -> Result<Vec<KeyPair>> {
-    let body = form_params(&[
-        ("Action", "DescribeKeyPairs"),
-        ("Version", "2016-11-15"),
-    ]);
+    let body = form_params(&[("Action", "DescribeKeyPairs"), ("Version", "2016-11-15")]);
     let xml = ec2_query(client, creds, region, &body).await?;
     let v = xml_to_value(&xml)?;
 
@@ -463,7 +496,10 @@ async fn ec2_query(
     body: &str,
 ) -> Result<String> {
     let url = format!("https://ec2.{region}.amazonaws.com/");
-    let creds_for_region = AwsCreds { region: region.to_string(), ..creds.clone() };
+    let creds_for_region = AwsCreds {
+        region: region.to_string(),
+        ..creds.clone()
+    };
     let body_bytes = body.as_bytes();
 
     let signed = sign(
@@ -500,7 +536,10 @@ async fn ec2_query(
 fn parse_instance(i: &serde_json::Value, region: &str) -> Option<Ec2Instance> {
     let id = i["instanceId"].as_str()?.to_string();
     let instance_type = i["instanceType"].as_str().unwrap_or("unknown").to_string();
-    let state = i["instanceState"]["name"].as_str().unwrap_or("unknown").to_string();
+    let state = i["instanceState"]["name"]
+        .as_str()
+        .unwrap_or("unknown")
+        .to_string();
 
     let region = i["placement"]["availabilityZone"]
         .as_str()
@@ -514,17 +553,15 @@ fn parse_instance(i: &serde_json::Value, region: &str) -> Option<Ec2Instance> {
 
     // StateTransitionReason format: "User initiated (2026-03-01 12:00:00 UTC)"
     let stopped_at = if state == "stopped" {
-        i["stateTransitionReason"]
-            .as_str()
-            .and_then(|r| {
-                let start = r.find('(')? + 1;
-                let end = r.find(')')?;
-                let ts = &r[start..end]; // "2026-03-01 12:00:00 UTC"
-                let ts = ts.trim_end_matches(" UTC");
-                chrono::NaiveDateTime::parse_from_str(ts, "%Y-%m-%d %H:%M:%S")
-                    .ok()
-                    .map(|ndt| ndt.and_utc())
-            })
+        i["stateTransitionReason"].as_str().and_then(|r| {
+            let start = r.find('(')? + 1;
+            let end = r.find(')')?;
+            let ts = &r[start..end]; // "2026-03-01 12:00:00 UTC"
+            let ts = ts.trim_end_matches(" UTC");
+            chrono::NaiveDateTime::parse_from_str(ts, "%Y-%m-%d %H:%M:%S")
+                .ok()
+                .map(|ndt| ndt.and_utc())
+        })
     } else {
         None
     };

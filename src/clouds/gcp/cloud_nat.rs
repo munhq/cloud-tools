@@ -11,17 +11,14 @@ use super::auth::{access_token, GcpCreds};
 
 #[derive(Debug, Clone)]
 pub struct CloudNat {
-    pub name: String,          // NAT gateway name
-    pub router_name: String,   // parent router name
+    pub name: String,        // NAT gateway name
+    pub router_name: String, // parent router name
     pub region: String,
     pub source_ranges: String, // e.g. "ALL_SUBNETWORKS_ALL_IP_RANGES"
     pub nat_ips: Vec<String>,  // external IPs used (may be auto-allocated)
 }
 
-pub async fn list_cloud_nats(
-    http: &Client,
-    creds: &GcpCreds,
-) -> Result<Vec<CloudNat>> {
+pub async fn list_cloud_nats(http: &Client, creds: &GcpCreds) -> Result<Vec<CloudNat>> {
     let token = access_token(http, creds).await?;
     let project = &creds.project_id;
 
@@ -45,9 +42,7 @@ pub async fn list_cloud_nats(
 }
 
 async fn list_regions(http: &Client, token: &str, project: &str) -> Result<Vec<String>> {
-    let url = format!(
-        "https://compute.googleapis.com/compute/v1/projects/{project}/regions"
-    );
+    let url = format!("https://compute.googleapis.com/compute/v1/projects/{project}/regions");
     let resp = http.get(&url).bearer_auth(token).send().await?;
     if !resp.status().is_success() {
         return Ok(Vec::new());

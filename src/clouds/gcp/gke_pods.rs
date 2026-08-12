@@ -42,9 +42,7 @@ async fn fetch_metric(
     end_str: &str,
     alignment_period: &str,
 ) -> Result<HashMap<(String, String), f64>> {
-    let url = format!(
-        "https://monitoring.googleapis.com/v3/projects/{project_id}/timeSeries"
-    );
+    let url = format!("https://monitoring.googleapis.com/v3/projects/{project_id}/timeSeries");
 
     let filter = format!("metric.type=\"{metric_type}\"");
 
@@ -136,7 +134,8 @@ pub async fn get_pod_resource_usage(
     let mem_map = mem_result?;
 
     // Merge CPU and memory data. Collect all unique (namespace, container) keys.
-    let mut all_keys: std::collections::HashSet<(String, String)> = cpu_map.keys().cloned().collect();
+    let mut all_keys: std::collections::HashSet<(String, String)> =
+        cpu_map.keys().cloned().collect();
     for key in mem_map.keys() {
         all_keys.insert(key.clone());
     }
@@ -151,10 +150,7 @@ pub async fn get_pod_resource_usage(
             cpu_request_utilization: cpu_map.get(&key).copied(),
             memory_request_utilization: mem_map.get(&key).copied(),
         };
-        by_namespace
-            .entry(key.0)
-            .or_default()
-            .push(usage);
+        by_namespace.entry(key.0).or_default().push(usage);
     }
 
     let mut summaries: Vec<NamespaceResourceSummary> = by_namespace

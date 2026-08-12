@@ -43,10 +43,18 @@ async fn list_instances(http: &Client, token: &str, project: &str) -> Result<Vec
         // zone_key is like "zones/us-central1-a" — derive region by dropping last segment
         let region = zone_key.rsplit('/').next().and_then(|z| {
             let parts: Vec<&str> = z.rsplitn(2, '-').collect();
-            if parts.len() == 2 { Some(parts[1].to_string()) } else { None }
+            if parts.len() == 2 {
+                Some(parts[1].to_string())
+            } else {
+                None
+            }
         });
 
-        for inst in zone_data["instances"].as_array().cloned().unwrap_or_default() {
+        for inst in zone_data["instances"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+        {
             let status = inst["status"].as_str().unwrap_or("UNKNOWN");
             out.push(GcpResource {
                 provider: "gcp",
@@ -95,22 +103,35 @@ pub async fn list_disks(http: &Client, token: &str, project: &str) -> Result<Vec
 
     for (zone_key, zone_data) in data["items"].as_object().cloned().unwrap_or_default() {
         let zone = zone_key.rsplit('/').next().unwrap_or("").to_string();
-        let region = zone.rsplitn(2, '-').nth(1).unwrap_or("").to_string();
+        let region = zone.rsplit_once('-').map(|x| x.0).unwrap_or("").to_string();
 
         for disk in zone_data["disks"].as_array().cloned().unwrap_or_default() {
             let name = disk["name"].as_str().unwrap_or("").to_string();
             let id = disk["id"].as_str().unwrap_or("").to_string();
-            let size_gb = disk["sizeGb"].as_str().and_then(|s| s.parse().ok()).unwrap_or(0);
+            let size_gb = disk["sizeGb"]
+                .as_str()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
             let disk_type = disk["type"]
                 .as_str()
                 .and_then(|t| t.rsplit('/').next())
                 .unwrap_or("pd-standard")
                 .to_string();
             let status = disk["status"].as_str().unwrap_or("").to_string();
-            let attached = disk["users"].as_array().map(|a| !a.is_empty()).unwrap_or(false);
+            let attached = disk["users"]
+                .as_array()
+                .map(|a| !a.is_empty())
+                .unwrap_or(false);
 
             out.push(GcpDisk {
-                name, id, size_gb, disk_type, status, zone: zone.clone(), region: region.clone(), attached,
+                name,
+                id,
+                size_gb,
+                disk_type,
+                status,
+                zone: zone.clone(),
+                region: region.clone(),
+                attached,
             });
         }
     }
@@ -140,7 +161,11 @@ pub async fn list_addresses(http: &Client, token: &str, project: &str) -> Result
     let mut out = Vec::new();
 
     for (_key, region_data) in data["items"].as_object().cloned().unwrap_or_default() {
-        for addr in region_data["addresses"].as_array().cloned().unwrap_or_default() {
+        for addr in region_data["addresses"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+        {
             let name = addr["name"].as_str().unwrap_or("").to_string();
             let address = addr["address"].as_str().unwrap_or("").to_string();
             let status = addr["status"].as_str().unwrap_or("").to_string();
@@ -149,10 +174,17 @@ pub async fn list_addresses(http: &Client, token: &str, project: &str) -> Result
                 .and_then(|r| r.rsplit('/').next())
                 .unwrap_or("")
                 .to_string();
-            let addr_type = addr["addressType"].as_str().unwrap_or("EXTERNAL").to_string();
+            let addr_type = addr["addressType"]
+                .as_str()
+                .unwrap_or("EXTERNAL")
+                .to_string();
 
             out.push(GcpAddress {
-                name, address, status, region, address_type: addr_type,
+                name,
+                address,
+                status,
+                region,
+                address_type: addr_type,
             });
         }
     }
@@ -192,15 +224,26 @@ pub async fn list_snapshots(http: &Client, token: &str, project: &str) -> Result
         .filter_map(|s| {
             let name = s["name"].as_str()?.to_string();
             let id = s["id"].as_str().unwrap_or("").to_string();
-            let disk_size = s["diskSizeGb"].as_str().and_then(|v| v.parse().ok()).unwrap_or(0);
-            let storage = s["storageBytes"].as_str().and_then(|v| v.parse().ok()).unwrap_or(0);
+            let disk_size = s["diskSizeGb"]
+                .as_str()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
+            let storage = s["storageBytes"]
+                .as_str()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
             let status = s["status"].as_str().unwrap_or("").to_string();
             let created = s["creationTimestamp"].as_str().map(String::from);
             let source = s["sourceDisk"].as_str().unwrap_or("").to_string();
 
             Some(GcpSnapshot {
-                name, id, disk_size_gb: disk_size, storage_bytes: storage,
-                status, creation_timestamp: created, source_disk: source,
+                name,
+                id,
+                disk_size_gb: disk_size,
+                storage_bytes: storage,
+                status,
+                creation_timestamp: created,
+                source_disk: source,
                 source_disk_exists: true, // will be set correctly by the analyzer
             })
         })
@@ -214,11 +257,15 @@ pub struct GcpForwardingRule {
     pub name: String,
     pub region: String,
     pub ip_address: String,
-    pub target: String,     // target pool or proxy URL
+    pub target: String, // target pool or proxy URL
     pub load_balancing_scheme: String,
 }
 
-pub async fn list_forwarding_rules(http: &Client, token: &str, project: &str) -> Result<Vec<GcpForwardingRule>> {
+pub async fn list_forwarding_rules(
+    http: &Client,
+    token: &str,
+    project: &str,
+) -> Result<Vec<GcpForwardingRule>> {
     let url = format!(
         "https://compute.googleapis.com/compute/v1/projects/{project}/aggregated/forwardingRules?maxResults=500"
     );
@@ -230,7 +277,11 @@ pub async fn list_forwarding_rules(http: &Client, token: &str, project: &str) ->
     let mut out = Vec::new();
 
     for (_key, region_data) in data["items"].as_object().cloned().unwrap_or_default() {
-        for rule in region_data["forwardingRules"].as_array().cloned().unwrap_or_default() {
+        for rule in region_data["forwardingRules"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+        {
             let name = rule["name"].as_str().unwrap_or("").to_string();
             let region = rule["region"]
                 .as_str()
@@ -239,10 +290,17 @@ pub async fn list_forwarding_rules(http: &Client, token: &str, project: &str) ->
                 .to_string();
             let ip = rule["IPAddress"].as_str().unwrap_or("").to_string();
             let target = rule["target"].as_str().unwrap_or("").to_string();
-            let scheme = rule["loadBalancingScheme"].as_str().unwrap_or("").to_string();
+            let scheme = rule["loadBalancingScheme"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
 
             out.push(GcpForwardingRule {
-                name, region, ip_address: ip, target, load_balancing_scheme: scheme,
+                name,
+                region,
+                ip_address: ip,
+                target,
+                load_balancing_scheme: scheme,
             });
         }
     }
@@ -285,7 +343,11 @@ async fn idle_recommendations(
             continue;
         }
         let data: Value = resp.json().await?;
-        for rec in data["recommendations"].as_array().cloned().unwrap_or_default() {
+        for rec in data["recommendations"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+        {
             if rec["stateInfo"]["state"].as_str() != Some("ACTIVE") {
                 continue;
             }

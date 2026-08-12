@@ -51,18 +51,11 @@ pub async fn list_services(http: &Client, creds: &OvhCreds) -> Result<Vec<OvhSer
                 .unwrap_or("unknown")
                 .to_string();
 
-            let status = resource["state"]
-                .as_str()
-                .unwrap_or("unknown")
-                .to_string();
+            let status = resource["state"].as_str().unwrap_or("unknown").to_string();
 
-            let creation_date = lifecycle["creationDate"]
-                .as_str()
-                .map(String::from);
+            let creation_date = lifecycle["creationDate"].as_str().map(String::from);
 
-            let expiration_date = billing["expirationDate"]
-                .as_str()
-                .map(String::from);
+            let expiration_date = billing["expirationDate"].as_str().map(String::from);
 
             let renew_type = billing["renew"]["current"]["mode"]
                 .as_str()
@@ -73,13 +66,11 @@ pub async fn list_services(http: &Client, creds: &OvhCreds) -> Result<Vec<OvhSer
                 .map(|a| a.iter().any(|v| v.as_str() == Some("terminate")))
                 .unwrap_or(false);
 
-            let monthly_cost = billing["pricing"]["price"]["value"]
-                .as_f64()
-                .or_else(|| {
-                    billing["pricing"]["price"]["value"]
-                        .as_str()
-                        .and_then(|s| s.parse::<f64>().ok())
-                });
+            let monthly_cost = billing["pricing"]["price"]["value"].as_f64().or_else(|| {
+                billing["pricing"]["price"]["value"]
+                    .as_str()
+                    .and_then(|s| s.parse::<f64>().ok())
+            });
 
             services.push(OvhService {
                 service_id: id.to_string(),

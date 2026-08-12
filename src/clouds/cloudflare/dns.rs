@@ -42,9 +42,7 @@ pub async fn list_dns_records(
         .map(|(zone_id, zone_name)| {
             let http = http.clone();
             let token = creds.api_token.clone();
-            async move {
-                fetch_zone_dns(&http, &token, &zone_id, &zone_name).await
-            }
+            async move { fetch_zone_dns(&http, &token, &zone_id, &zone_name).await }
         })
         .collect();
 
@@ -62,10 +60,7 @@ pub async fn list_dns_records(
 }
 
 /// Fetch all zone IDs and names for the account.
-async fn fetch_zone_ids(
-    http: &Client,
-    creds: &CloudflareCreds,
-) -> Result<Vec<(String, String)>> {
+async fn fetch_zone_ids(http: &Client, creds: &CloudflareCreds) -> Result<Vec<(String, String)>> {
     let mut zones = Vec::new();
     let mut page = 1u32;
 

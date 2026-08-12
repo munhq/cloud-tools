@@ -33,11 +33,7 @@ pub async fn list_zones(http: &Client, creds: &CloudflareCreds) -> Result<Vec<Cf
             return Ok(Vec::new());
         }
         if !status.is_success() {
-            return Err(anyhow!(
-                "CF zones ({}): {}",
-                status,
-                resp.text().await?
-            ));
+            return Err(anyhow!("CF zones ({}): {}", status, resp.text().await?));
         }
 
         let data: Value = resp.json().await?;
@@ -60,7 +56,10 @@ pub async fn list_zones(http: &Client, creds: &CloudflareCreds) -> Result<Vec<Cf
                 id: zone["id"].as_str().unwrap_or("").to_string(),
                 name: zone["name"].as_str().unwrap_or("").to_string(),
                 status: zone["status"].as_str().unwrap_or("unknown").to_string(),
-                plan_name: zone["plan"]["name"].as_str().unwrap_or("Unknown").to_string(),
+                plan_name: zone["plan"]["name"]
+                    .as_str()
+                    .unwrap_or("Unknown")
+                    .to_string(),
                 plan_price: zone["plan"]["price"].as_f64().unwrap_or(0.0),
                 plan_currency: zone["plan"]["currency"]
                     .as_str()

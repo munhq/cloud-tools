@@ -45,14 +45,24 @@ pub async fn get_ec2_recommendations(
         .map(|r| get_in_region(client, creds, r))
         .collect();
     let results = join_all(tasks).await;
-    Ok(results.into_iter().filter_map(|r| r.ok()).flatten().collect())
+    Ok(results
+        .into_iter()
+        .filter_map(|r| r.ok())
+        .flatten()
+        .collect())
 }
 
 // ── Enrollment check ─────────────────────────────────────────────────────────
 
 async fn is_enrolled(client: &reqwest::Client, creds: &AwsCreds) -> bool {
-    let result = co_query(client, creds, "us-east-1",
-        "ComputeOptimizerService.GetEnrollmentStatus", b"{}").await;
+    let result = co_query(
+        client,
+        creds,
+        "us-east-1",
+        "ComputeOptimizerService.GetEnrollmentStatus",
+        b"{}",
+    )
+    .await;
 
     match result {
         Ok(resp) => resp["status"].as_str() == Some("Active"),
@@ -65,19 +75,28 @@ async fn is_enrolled(client: &reqwest::Client, creds: &AwsCreds) -> bool {
 async fn list_regions(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<String>> {
     let body = form_params(&[("Action", "DescribeRegions"), ("Version", "2016-11-15")]);
     let url = "https://ec2.us-east-1.amazonaws.com/";
-    let creds_for_region = AwsCreds { region: "us-east-1".into(), ..creds.clone() };
+    let creds_for_region = AwsCreds {
+        region: "us-east-1".into(),
+        ..creds.clone()
+    };
     let signed = sign(
-        &creds_for_region, "POST", url,
+        &creds_for_region,
+        "POST",
+        url,
         &[("content-type", "application/x-www-form-urlencoded")],
-        body.as_bytes(), "ec2",
+        body.as_bytes(),
+        "ec2",
     )?;
-    let mut req = client.post(url)
+    let mut req = client
+        .post(url)
         .header("content-type", "application/x-www-form-urlencoded")
         .header("x-amz-date", &signed.x_amz_date)
         .header("x-amz-content-sha256", &signed.x_amz_content_sha256)
         .header("authorization", &signed.authorization)
         .body(body);
-    if let Some(t) = &signed.x_amz_security_token { req = req.header("x-amz-security-token", t); }
+    if let Some(t) = &signed.x_amz_security_token {
+        req = req.header("x-amz-security-token", t);
+    }
     let resp = req.send().await?;
     let xml = resp.text().await?;
     let v = super::xml_to_value(&xml)?;
@@ -112,10 +131,13 @@ async fn get_in_region(
 
         let body_bytes = serde_json::to_vec(&body)?;
         let resp = co_query(
-            client, creds, region,
+            client,
+            creds,
+            region,
             "ComputeOptimizerService.GetEC2InstanceRecommendations",
             &body_bytes,
-        ).await;
+        )
+        .await;
 
         // Compute Optimizer may not be available in all regions
         let resp = match resp {
@@ -123,18 +145,20 @@ async fn get_in_region(
             Err(_) => break,
         };
 
-        let parsed: GetEc2RecommendationsResponse = serde_json::from_value(resp)
-            .unwrap_or_default();
+        let parsed: GetEc2RecommendationsResponse =
+            serde_json::from_value(resp).unwrap_or_default();
 
         for rec in parsed.instance_recommendations {
             // Get the rank-1 recommendation (best fit)
-            let best = rec.recommendation_options.iter()
-                .filter(|o| o.rank == Some(1))
-                .next()
+            let best = rec
+                .recommendation_options
+                .iter()
+                .find(|o| o.rank == Some(1))
                 .or_else(|| rec.recommendation_options.first());
 
             if let Some(opt) = best {
-                let savings = opt.estimated_monthly_savings
+                let savings = opt
+                    .estimated_monthly_savings
                     .as_ref()
                     .map(|s| s.value)
                     .unwrap_or(0.0);
@@ -173,7 +197,10 @@ async fn co_query(
     body: &[u8],
 ) -> Result<serde_json::Value> {
     let url = format!("https://compute-optimizer.{region}.amazonaws.com/");
-    let creds_for_region = AwsCreds { region: region.to_string(), ..creds.clone() };
+    let creds_for_region = AwsCreds {
+        region: region.to_string(),
+        ..creds.clone()
+    };
 
     let signed = sign(
         &creds_for_region,
@@ -203,7 +230,9 @@ async fn co_query(
     let status = resp.status();
     let text = resp.text().await?;
     if !status.is_success() {
-        return Err(anyhow!("Compute Optimizer error {status} in {region}: {text}"));
+        return Err(anyhow!(
+            "Compute Optimizer error {status} in {region}: {text}"
+        ));
     }
     Ok(serde_json::from_str(&text)?)
 }

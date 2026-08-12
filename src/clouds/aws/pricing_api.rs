@@ -5,10 +5,10 @@
 //! hardcoded us-east-1 prices from `pricing.rs` when the API is unreachable
 //! or returns no data.
 
-use std::collections::HashSet;
 use anyhow::{anyhow, Result};
 use futures::future::join_all;
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 use super::auth::{sign, AwsCreds};
 use super::pricing;
@@ -32,14 +32,18 @@ impl PriceCache {
     pub async fn build(
         client: &reqwest::Client,
         creds: &AwsCreds,
-        ec2_queries: &[(String, String)],           // (instance_type, region)
-        rds_queries: &[(String, String, String)],    // (instance_class, region, engine)
-        cache_queries: &[(String, String, String)],  // (node_type, region, engine)
+        ec2_queries: &[(String, String)], // (instance_type, region)
+        rds_queries: &[(String, String, String)], // (instance_class, region, engine)
+        cache_queries: &[(String, String, String)], // (node_type, region, engine)
     ) -> Self {
         let ec2 = fetch_ec2_prices(client, creds, ec2_queries).await;
         let rds = fetch_rds_prices(client, creds, rds_queries).await;
         let elasticache = fetch_elasticache_prices(client, creds, cache_queries).await;
-        Self { ec2, rds, elasticache }
+        Self {
+            ec2,
+            rds,
+            elasticache,
+        }
     }
 
     /// Monthly EC2 cost, preferring per-region API price, falling back to hardcoded.
@@ -59,7 +63,12 @@ impl PriceCache {
     }
 
     /// Monthly ElastiCache cost (all nodes), preferring per-region API price.
-    pub fn elasticache_monthly(&self, node_type: &str, num_nodes: u32, region: &str) -> Option<f64> {
+    pub fn elasticache_monthly(
+        &self,
+        node_type: &str,
+        num_nodes: u32,
+        region: &str,
+    ) -> Option<f64> {
         self.elasticache
             .get(&(node_type.to_string(), region.to_string()))
             .map(|h| h * pricing::HOURS_PER_MONTH * num_nodes as f64)
@@ -75,17 +84,21 @@ async fn fetch_ec2_prices(
     queries: &[(String, String)],
 ) -> HashMap<(String, String), f64> {
     let unique: HashSet<_> = queries.iter().cloned().collect();
-    let tasks: Vec<_> = unique.into_iter().map(|(itype, region)| {
-        let client = client.clone();
-        let creds = creds.clone();
-        async move {
-            let result = fetch_ec2_hourly(&client, &creds, &itype, &region).await;
-            ((itype, region), result)
-        }
-    }).collect();
+    let tasks: Vec<_> = unique
+        .into_iter()
+        .map(|(itype, region)| {
+            let client = client.clone();
+            let creds = creds.clone();
+            async move {
+                let result = fetch_ec2_hourly(&client, &creds, &itype, &region).await;
+                ((itype, region), result)
+            }
+        })
+        .collect();
 
     let results = join_all(tasks).await;
-    results.into_iter()
+    results
+        .into_iter()
         .filter_map(|(key, result)| result.ok().map(|price| (key, price)))
         .collect()
 }
@@ -124,17 +137,21 @@ async fn fetch_rds_prices(
     queries: &[(String, String, String)],
 ) -> HashMap<(String, String), f64> {
     let unique: HashSet<_> = queries.iter().cloned().collect();
-    let tasks: Vec<_> = unique.into_iter().map(|(iclass, region, engine)| {
-        let client = client.clone();
-        let creds = creds.clone();
-        async move {
-            let result = fetch_rds_hourly(&client, &creds, &iclass, &region, &engine).await;
-            ((iclass, region), result)
-        }
-    }).collect();
+    let tasks: Vec<_> = unique
+        .into_iter()
+        .map(|(iclass, region, engine)| {
+            let client = client.clone();
+            let creds = creds.clone();
+            async move {
+                let result = fetch_rds_hourly(&client, &creds, &iclass, &region, &engine).await;
+                ((iclass, region), result)
+            }
+        })
+        .collect();
 
     let results = join_all(tasks).await;
-    results.into_iter()
+    results
+        .into_iter()
         .filter_map(|(key, result)| result.ok().map(|price| (key, price)))
         .collect()
 }
@@ -184,17 +201,22 @@ async fn fetch_elasticache_prices(
     queries: &[(String, String, String)],
 ) -> HashMap<(String, String), f64> {
     let unique: HashSet<_> = queries.iter().cloned().collect();
-    let tasks: Vec<_> = unique.into_iter().map(|(ntype, region, engine)| {
-        let client = client.clone();
-        let creds = creds.clone();
-        async move {
-            let result = fetch_elasticache_hourly(&client, &creds, &ntype, &region, &engine).await;
-            ((ntype, region), result)
-        }
-    }).collect();
+    let tasks: Vec<_> = unique
+        .into_iter()
+        .map(|(ntype, region, engine)| {
+            let client = client.clone();
+            let creds = creds.clone();
+            async move {
+                let result =
+                    fetch_elasticache_hourly(&client, &creds, &ntype, &region, &engine).await;
+                ((ntype, region), result)
+            }
+        })
+        .collect();
 
     let results = join_all(tasks).await;
-    results.into_iter()
+    results
+        .into_iter()
         .filter_map(|(key, result)| result.ok().map(|price| (key, price)))
         .collect()
 }
@@ -239,7 +261,10 @@ async fn pricing_query(
 ) -> Result<serde_json::Value> {
     let url = "https://api.pricing.us-east-1.amazonaws.com/";
     let body_bytes = serde_json::to_vec(body)?;
-    let creds_for_pricing = AwsCreds { region: "us-east-1".into(), ..creds.clone() };
+    let creds_for_pricing = AwsCreds {
+        region: "us-east-1".into(),
+        ..creds.clone()
+    };
 
     let signed = sign(
         &creds_for_pricing,
@@ -325,18 +350,18 @@ fn extract_hourly_price(resp: &serde_json::Value) -> Result<f64> {
 /// Map AWS region codes to the display names used by the Pricing API.
 fn region_display_name(region: &str) -> Option<&'static str> {
     Some(match region {
-        "us-east-1"      => "US East (N. Virginia)",
-        "us-east-2"      => "US East (Ohio)",
-        "us-west-1"      => "US West (N. California)",
-        "us-west-2"      => "US West (Oregon)",
-        "eu-west-1"      => "EU (Ireland)",
-        "eu-west-2"      => "EU (London)",
-        "eu-west-3"      => "EU (Paris)",
-        "eu-central-1"   => "EU (Frankfurt)",
-        "eu-central-2"   => "EU (Zurich)",
-        "eu-north-1"     => "EU (Stockholm)",
-        "eu-south-1"     => "EU (Milan)",
-        "eu-south-2"     => "EU (Spain)",
+        "us-east-1" => "US East (N. Virginia)",
+        "us-east-2" => "US East (Ohio)",
+        "us-west-1" => "US West (N. California)",
+        "us-west-2" => "US West (Oregon)",
+        "eu-west-1" => "EU (Ireland)",
+        "eu-west-2" => "EU (London)",
+        "eu-west-3" => "EU (Paris)",
+        "eu-central-1" => "EU (Frankfurt)",
+        "eu-central-2" => "EU (Zurich)",
+        "eu-north-1" => "EU (Stockholm)",
+        "eu-south-1" => "EU (Milan)",
+        "eu-south-2" => "EU (Spain)",
         "ap-northeast-1" => "Asia Pacific (Tokyo)",
         "ap-northeast-2" => "Asia Pacific (Seoul)",
         "ap-northeast-3" => "Asia Pacific (Osaka)",
@@ -344,16 +369,16 @@ fn region_display_name(region: &str) -> Option<&'static str> {
         "ap-southeast-2" => "Asia Pacific (Sydney)",
         "ap-southeast-3" => "Asia Pacific (Jakarta)",
         "ap-southeast-4" => "Asia Pacific (Melbourne)",
-        "ap-south-1"     => "Asia Pacific (Mumbai)",
-        "ap-south-2"     => "Asia Pacific (Hyderabad)",
-        "ap-east-1"      => "Asia Pacific (Hong Kong)",
-        "sa-east-1"      => "South America (Sao Paulo)",
-        "ca-central-1"   => "Canada (Central)",
-        "ca-west-1"      => "Canada West (Calgary)",
-        "me-south-1"     => "Middle East (Bahrain)",
-        "me-central-1"   => "Middle East (UAE)",
-        "af-south-1"     => "Africa (Cape Town)",
-        "il-central-1"   => "Israel (Tel Aviv)",
+        "ap-south-1" => "Asia Pacific (Mumbai)",
+        "ap-south-2" => "Asia Pacific (Hyderabad)",
+        "ap-east-1" => "Asia Pacific (Hong Kong)",
+        "sa-east-1" => "South America (Sao Paulo)",
+        "ca-central-1" => "Canada (Central)",
+        "ca-west-1" => "Canada West (Calgary)",
+        "me-south-1" => "Middle East (Bahrain)",
+        "me-central-1" => "Middle East (UAE)",
+        "af-south-1" => "Africa (Cape Town)",
+        "il-central-1" => "Israel (Tel Aviv)",
         _ => return None,
     })
 }

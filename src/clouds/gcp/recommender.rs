@@ -17,8 +17,8 @@ pub struct GcpRecommendation {
     pub resource_name: String,
     pub description: String,
     pub estimated_monthly_savings_usd: f64,
-    pub location: String,         // zone or region
-    pub state: String,            // "ACTIVE"
+    pub location: String, // zone or region
+    pub state: String,    // "ACTIVE"
 }
 
 /// Recommender types to query.
@@ -50,26 +50,22 @@ pub async fn get_recommendations(
                 let project = creds.project_id.clone();
                 let loc = loc.clone();
                 let rtype = rtype.to_string();
-                async move {
-                    fetch_recommendations(&http, &token, &project, &loc, &rtype).await
-                }
+                async move { fetch_recommendations(&http, &token, &project, &loc, &rtype).await }
             })
         })
         .collect();
 
     let results = join_all(tasks).await;
-    Ok(results.into_iter().filter_map(|r| r.ok()).flatten().collect())
+    Ok(results
+        .into_iter()
+        .filter_map(|r| r.ok())
+        .flatten()
+        .collect())
 }
 
-async fn list_locations(
-    http: &Client,
-    token: &str,
-    project: &str,
-) -> Result<Vec<String>> {
+async fn list_locations(http: &Client, token: &str, project: &str) -> Result<Vec<String>> {
     // Get zones (for compute recommenders)
-    let url = format!(
-        "https://compute.googleapis.com/compute/v1/projects/{project}/zones"
-    );
+    let url = format!("https://compute.googleapis.com/compute/v1/projects/{project}/zones");
     let resp = http.get(&url).bearer_auth(token).send().await?;
     if !resp.status().is_success() {
         return Ok(Vec::new());
@@ -84,9 +80,7 @@ async fn list_locations(
         .collect();
 
     // Also add regions (for Cloud SQL recommenders)
-    let url = format!(
-        "https://compute.googleapis.com/compute/v1/projects/{project}/regions"
-    );
+    let url = format!("https://compute.googleapis.com/compute/v1/projects/{project}/regions");
     let resp = http.get(&url).bearer_auth(token).send().await?;
     if resp.status().is_success() {
         let data: serde_json::Value = resp.json().await?;
@@ -137,10 +131,7 @@ async fn fetch_recommendations(
 
             let description = rec["description"].as_str().unwrap_or("").to_string();
 
-            let subtype = rec["recommenderSubtype"]
-                .as_str()
-                .unwrap_or("")
-                .to_string();
+            let subtype = rec["recommenderSubtype"].as_str().unwrap_or("").to_string();
 
             // Extract savings — can be in units (string) or nanos
             let cost = &rec["primaryImpact"]["costProjection"]["cost"];

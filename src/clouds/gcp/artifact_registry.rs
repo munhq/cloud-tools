@@ -21,10 +21,7 @@ pub struct ArtifactRepo {
 /// Multi-region locations where gcr.io repos and other multi-region repos live.
 const MULTI_REGION_LOCATIONS: &[&str] = &["us", "europe", "asia"];
 
-pub async fn list_artifact_repos(
-    http: &Client,
-    creds: &GcpCreds,
-) -> Result<Vec<ArtifactRepo>> {
+pub async fn list_artifact_repos(http: &Client, creds: &GcpCreds) -> Result<Vec<ArtifactRepo>> {
     let token = access_token(http, creds).await?;
     let project = &creds.project_id;
 
@@ -49,9 +46,7 @@ pub async fn list_artifact_repos(
 }
 
 async fn list_regions(http: &Client, token: &str, project: &str) -> Result<Vec<String>> {
-    let url = format!(
-        "https://compute.googleapis.com/compute/v1/projects/{project}/regions"
-    );
+    let url = format!("https://compute.googleapis.com/compute/v1/projects/{project}/regions");
     let resp = http.get(&url).bearer_auth(token).send().await?;
     if !resp.status().is_success() {
         return Ok(Vec::new());

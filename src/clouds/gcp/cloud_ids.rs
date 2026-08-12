@@ -17,10 +17,7 @@ pub struct CloudIdsEndpoint {
     pub region: String,   // extracted from location in the name field
 }
 
-pub async fn list_ids_endpoints(
-    http: &Client,
-    creds: &GcpCreds,
-) -> Result<Vec<CloudIdsEndpoint>> {
+pub async fn list_ids_endpoints(http: &Client, creds: &GcpCreds) -> Result<Vec<CloudIdsEndpoint>> {
     let token = access_token(http, creds).await?;
     let project = &creds.project_id;
     let mut out = Vec::new();
@@ -57,7 +54,10 @@ pub async fn list_ids_endpoints(
                 .unwrap_or("")
                 .to_string();
             let network = ep["network"].as_str().unwrap_or("").to_string();
-            let severity = ep["severity"].as_str().unwrap_or("INFORMATIONAL").to_string();
+            let severity = ep["severity"]
+                .as_str()
+                .unwrap_or("INFORMATIONAL")
+                .to_string();
             let state = ep["state"].as_str().unwrap_or("UNKNOWN").to_string();
 
             out.push(CloudIdsEndpoint {

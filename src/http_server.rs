@@ -1,5 +1,5 @@
-use axum::{Json, Router, extract::State, http::StatusCode, routing::get, routing::post};
 use axum::response::IntoResponse;
+use axum::{extract::State, http::StatusCode, routing::get, routing::post, Json, Router};
 use chrono::{Duration as ChronoDuration, NaiveDate};
 use serde::Deserialize;
 use std::sync::Arc;
@@ -81,7 +81,10 @@ pub async fn serve(port: u16) -> anyhow::Result<()> {
         .route("/health", get(health))
         // AWS onboarding
         .route("/setup/aws/cloudformation.yaml", get(setup_aws_template))
-        .route("/setup/aws/member-cloudformation.yaml", get(setup_aws_member_template))
+        .route(
+            "/setup/aws/member-cloudformation.yaml",
+            get(setup_aws_member_template),
+        )
         .route("/setup/aws/initiate", post(setup_aws_initiate))
         .route("/setup/aws/verify", post(setup_aws_verify))
         // AWS data (single-account or management-role service view)
@@ -320,7 +323,10 @@ async fn do_aws_org_costs(
     req: AwsOrgRequest,
 ) -> anyhow::Result<serde_json::Value> {
     let external_id = format!("munbot-{}", req.management_account_id);
-    let mgmt_arn = format!("arn:aws:iam::{}:role/MunbotFinOpsRole", req.management_account_id);
+    let mgmt_arn = format!(
+        "arn:aws:iam::{}:role/MunbotFinOpsRole",
+        req.management_account_id
+    );
     let creds = assume_role(http, &mgmt_arn, Some(&external_id)).await?;
 
     let now = chrono::Utc::now().date_naive();
@@ -328,7 +334,9 @@ async fn do_aws_org_costs(
     let costs = ce::get_costs_by_account(http, &creds, start, now).await?;
 
     // Try to map account IDs to names
-    let accounts = organizations::list_accounts(http, &creds).await.unwrap_or_default();
+    let accounts = organizations::list_accounts(http, &creds)
+        .await
+        .unwrap_or_default();
     let name_map: std::collections::HashMap<_, _> =
         accounts.into_iter().map(|a| (a.id, a.name)).collect();
 
@@ -382,7 +390,19 @@ async fn do_gcp_resources(
     let resources = compute::list_resources(http, &creds).await?;
     let json: Vec<serde_json::Value> = resources
         .into_iter()
-        .map(|r| resource_json(r.provider, &r.resource_id, r.resource_type, r.region, r.name, None, r.monthly_cost_estimate, r.last_active_at, r.raw))
+        .map(|r| {
+            resource_json(
+                r.provider,
+                &r.resource_id,
+                r.resource_type,
+                r.region,
+                r.name,
+                None,
+                r.monthly_cost_estimate,
+                r.last_active_at,
+                r.raw,
+            )
+        })
         .collect();
     Ok(serde_json::json!({ "total_count": json.len(), "resources": json }))
 }
@@ -419,10 +439,7 @@ async fn do_gcp_org_waste(
     Ok(serde_json::to_value(report)?)
 }
 
-async fn do_cf_costs(
-    http: &reqwest::Client,
-    req: CfRequest,
-) -> anyhow::Result<serde_json::Value> {
+async fn do_cf_costs(http: &reqwest::Client, req: CfRequest) -> anyhow::Result<serde_json::Value> {
     let creds = CloudflareCreds {
         api_token: req.api_token,
         account_id: req.account_id,
@@ -445,7 +462,19 @@ async fn do_cf_resources(
     let resources = workers::list_resources(http, &creds).await?;
     let json: Vec<serde_json::Value> = resources
         .into_iter()
-        .map(|r| resource_json(r.provider, &r.resource_id, r.resource_type, None, r.name, None, None, r.last_active_at, r.raw))
+        .map(|r| {
+            resource_json(
+                r.provider,
+                &r.resource_id,
+                r.resource_type,
+                None,
+                r.name,
+                None,
+                None,
+                r.last_active_at,
+                r.raw,
+            )
+        })
         .collect();
     Ok(serde_json::json!({ "total_count": json.len(), "resources": json }))
 }
@@ -480,7 +509,19 @@ async fn do_ovh_resources(
     let resources = instances::list_resources(http, &creds).await?;
     let json: Vec<serde_json::Value> = resources
         .into_iter()
-        .map(|r| resource_json(r.provider, &r.resource_id, r.resource_type, r.region, r.name, None, None, r.last_active_at, r.raw))
+        .map(|r| {
+            resource_json(
+                r.provider,
+                &r.resource_id,
+                r.resource_type,
+                r.region,
+                r.name,
+                None,
+                None,
+                r.last_active_at,
+                r.raw,
+            )
+        })
         .collect();
     Ok(serde_json::json!({ "total_count": json.len(), "resources": json }))
 }
@@ -498,11 +539,19 @@ struct SetupAwsVerifyRequest {
 }
 
 async fn setup_aws_template() -> impl IntoResponse {
-    (StatusCode::OK, [("content-type", "application/x-yaml")], aws_setup::CLOUDFORMATION_TEMPLATE)
+    (
+        StatusCode::OK,
+        [("content-type", "application/x-yaml")],
+        aws_setup::CLOUDFORMATION_TEMPLATE,
+    )
 }
 
 async fn setup_aws_member_template() -> impl IntoResponse {
-    (StatusCode::OK, [("content-type", "application/x-yaml")], aws_setup::MEMBER_CLOUDFORMATION_TEMPLATE)
+    (
+        StatusCode::OK,
+        [("content-type", "application/x-yaml")],
+        aws_setup::MEMBER_CLOUDFORMATION_TEMPLATE,
+    )
 }
 
 async fn setup_aws_initiate(
@@ -522,7 +571,11 @@ async fn setup_aws_verify(
     Json(req): Json<SetupAwsVerifyRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
     let result = aws_setup::verify(&s.http, &req.management_account_id).await;
-    let status = if result.connected { StatusCode::OK } else { StatusCode::BAD_GATEWAY };
+    let status = if result.connected {
+        StatusCode::OK
+    } else {
+        StatusCode::BAD_GATEWAY
+    };
     (status, Json(serde_json::to_value(result).unwrap()))
 }
 

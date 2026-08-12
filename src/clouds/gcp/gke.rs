@@ -8,9 +8,9 @@ use super::auth::{access_token, GcpCreds};
 #[derive(Debug, Clone)]
 pub struct GkeCluster {
     pub name: String,
-    pub location: String,      // e.g. "us-central1" or "us-central1-a"
-    pub status: String,        // "RUNNING", "PROVISIONING", "STOPPING", etc.
-    pub node_count: u32,       // total nodes across all pools
+    pub location: String, // e.g. "us-central1" or "us-central1-a"
+    pub status: String,   // "RUNNING", "PROVISIONING", "STOPPING", etc.
+    pub node_count: u32,  // total nodes across all pools
     pub node_pools: Vec<GkeNodePool>,
 }
 
@@ -24,10 +24,7 @@ pub struct GkeNodePool {
     pub max_node_count: u32,
 }
 
-pub async fn list_clusters(
-    http: &Client,
-    creds: &GcpCreds,
-) -> Result<Vec<GkeCluster>> {
+pub async fn list_clusters(http: &Client, creds: &GcpCreds) -> Result<Vec<GkeCluster>> {
     let token = access_token(http, creds).await?;
     // locations/- means all regions and zones
     let url = format!(
