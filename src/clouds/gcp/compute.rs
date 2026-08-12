@@ -26,7 +26,7 @@ pub async fn list_resources(http: &Client, creds: &GcpCreds) -> Result<Vec<GcpRe
 
 async fn list_instances(http: &Client, token: &str, project: &str) -> Result<Vec<GcpResource>> {
     let url = format!(
-        "https://compute.googleapis.com/compute/v1/projects/{project}/aggregatedList/instances?maxResults=500"
+        "https://compute.googleapis.com/compute/v1/projects/{project}/aggregated/instances?maxResults=500"
     );
     let resp = http.get(&url).bearer_auth(token).send().await?;
     if !resp.status().is_success() {
@@ -84,7 +84,7 @@ pub struct GcpDisk {
 
 pub async fn list_disks(http: &Client, token: &str, project: &str) -> Result<Vec<GcpDisk>> {
     let url = format!(
-        "https://compute.googleapis.com/compute/v1/projects/{project}/aggregatedList/disks?maxResults=500"
+        "https://compute.googleapis.com/compute/v1/projects/{project}/aggregated/disks?maxResults=500"
     );
     let resp = http.get(&url).bearer_auth(token).send().await?;
     if !resp.status().is_success() {
@@ -130,7 +130,7 @@ pub struct GcpAddress {
 
 pub async fn list_addresses(http: &Client, token: &str, project: &str) -> Result<Vec<GcpAddress>> {
     let url = format!(
-        "https://compute.googleapis.com/compute/v1/projects/{project}/aggregatedList/addresses?maxResults=500"
+        "https://compute.googleapis.com/compute/v1/projects/{project}/aggregated/addresses?maxResults=500"
     );
     let resp = http.get(&url).bearer_auth(token).send().await?;
     if !resp.status().is_success() {
@@ -220,7 +220,7 @@ pub struct GcpForwardingRule {
 
 pub async fn list_forwarding_rules(http: &Client, token: &str, project: &str) -> Result<Vec<GcpForwardingRule>> {
     let url = format!(
-        "https://compute.googleapis.com/compute/v1/projects/{project}/aggregatedList/forwardingRules?maxResults=500"
+        "https://compute.googleapis.com/compute/v1/projects/{project}/aggregated/forwardingRules?maxResults=500"
     );
     let resp = http.get(&url).bearer_auth(token).send().await?;
     if !resp.status().is_success() {

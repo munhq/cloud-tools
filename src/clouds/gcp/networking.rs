@@ -131,7 +131,7 @@ pub async fn list_psc_endpoints(
 
     // Check regional forwarding rules via aggregatedList
     let agg_url = format!(
-        "https://compute.googleapis.com/compute/v1/projects/{project}/aggregatedList/forwardingRules"
+        "https://compute.googleapis.com/compute/v1/projects/{project}/aggregated/forwardingRules"
     );
     let resp = http.get(&agg_url).bearer_auth(token).send().await?;
     if resp.status().is_success() {
