@@ -1,8 +1,8 @@
 # cloud-tools
 
-Multi-cloud cost, inventory and waste analysis in Rust — exposed as an **MCP server** so an AI agent can ask where the money is going, and as an **HTTP API** for everything else.
+Multi-cloud cost, inventory and waste analysis in Rust — exposed as an **MCP server** so an AI agent can query spend and waste directly, and as an **HTTP API** for everything else.
 
-Most cost tooling tells you what you spent. This tells you what you are wasting: idle instances, oversized nodes, previous-generation hardware, unattached resources, and commitments you are not using.
+It reports what you spend, and it reports what you waste: idle instances, oversized nodes, previous-generation hardware, unattached resources, and commitments you are not using.
 
 ## Tools
 
@@ -29,7 +29,7 @@ Each provider sits behind its own auth module, so credentials follow that cloud'
 
 ## Waste detection
 
-The analyzers are the point of the project. They combine inventory with utilisation metrics rather than flagging on a single dimension:
+The analyzers combine inventory with utilisation metrics rather than flagging on a single dimension:
 
 - **Idle** — provisioned and running, no meaningful traffic or CPU over the window.
 - **Oversized** — utilisation well below the instance class, with the right-size target named.
@@ -37,7 +37,7 @@ The analyzers are the point of the project. They combine inventory with utilisat
 - **Unattached** — NAT gateways, load balancers and volumes with nothing behind them.
 - **Commitment gaps** — Savings Plans and Committed Use Discounts you are paying for and not consuming.
 
-A finding without the utilisation evidence behind it is just noise, which is why `metrics` is a first-class tool rather than an implementation detail.
+Each finding carries the utilisation evidence behind it. The `metrics` tool exposes that evidence directly.
 
 ## Install
 
