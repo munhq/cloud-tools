@@ -39,6 +39,16 @@ The analyzers are the point of the project. They combine inventory with utilisat
 
 A finding without the utilisation evidence behind it is just noise, which is why `metrics` is a first-class tool rather than an implementation detail.
 
+## Install
+
+Prebuilt binaries for Linux and macOS, x86_64 and arm64, are attached to each
+[release](https://github.com/munhq/cloud-tools/releases):
+
+```bash
+curl -sSL https://github.com/munhq/cloud-tools/releases/latest/download/cloud-tools-<version>-x86_64-unknown-linux-gnu.tar.gz | tar xz
+./cloud-tools
+```
+
 ## Running it
 
 Built as a library (`cloud_tools`) with an optional binary. Two feature flags, both on by default:
