@@ -1,12 +1,14 @@
-use serde::Deserialize;
 use rmcp::schemars;
+use serde::Deserialize;
 
 use crate::analyzers::waste;
 use crate::clouds::aws::auth::assume_role;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct FindWasteInput {
-    #[schemars(description = "Customer's IAM Role ARN, e.g. arn:aws:iam::123456789:role/CloudToolsReadOnly")]
+    #[schemars(
+        description = "Customer's IAM Role ARN, e.g. arn:aws:iam::123456789:role/CloudToolsReadOnly"
+    )]
     pub role_arn: String,
     #[schemars(description = "Optional external ID from the role's trust policy")]
     pub external_id: Option<String>,

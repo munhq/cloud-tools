@@ -66,10 +66,7 @@ pub struct ServiceComparison {
     pub change_pct: Option<f64>,
 }
 
-pub async fn compare_costs(
-    client: &reqwest::Client,
-    creds: &AwsCreds,
-) -> Result<CostComparison> {
+pub async fn compare_costs(client: &reqwest::Client, creds: &AwsCreds) -> Result<CostComparison> {
     let today = Utc::now().date_naive();
     let day_of_month = today.day();
 
@@ -77,14 +74,27 @@ pub async fn compare_costs(
         // First day of month: compare full previous month vs the one before
         let prev_month_start = first_of_prev_month(today);
         let two_months_ago_start = first_of_prev_month(prev_month_start);
-        (prev_month_start, today, two_months_ago_start, prev_month_start)
+        (
+            prev_month_start,
+            today,
+            two_months_ago_start,
+            prev_month_start,
+        )
     } else {
         // Mid-month: compare day 1..today vs same window last month
         let cur_start = NaiveDate::from_ymd_opt(today.year(), today.month(), 1).unwrap();
         let prev_month_start = first_of_prev_month(today);
         // Clamp the day in case previous month is shorter (e.g., Feb 28 vs Mar 30)
-        let prev_end_day = day_of_month.min(days_in_month(prev_month_start.year(), prev_month_start.month()));
-        let prev_end = NaiveDate::from_ymd_opt(prev_month_start.year(), prev_month_start.month(), prev_end_day).unwrap();
+        let prev_end_day = day_of_month.min(days_in_month(
+            prev_month_start.year(),
+            prev_month_start.month(),
+        ));
+        let prev_end = NaiveDate::from_ymd_opt(
+            prev_month_start.year(),
+            prev_month_start.month(),
+            prev_end_day,
+        )
+        .unwrap();
         (cur_start, today, prev_month_start, prev_end)
     };
 
@@ -106,7 +116,8 @@ pub async fn compare_costs(
     };
 
     // Build per-service comparison
-    let mut service_map: std::collections::HashMap<String, (f64, f64)> = std::collections::HashMap::new();
+    let mut service_map: std::collections::HashMap<String, (f64, f64)> =
+        std::collections::HashMap::new();
     for c in &current_costs {
         service_map.entry(c.service.clone()).or_default().0 += c.amount_usd;
     }
@@ -117,15 +128,38 @@ pub async fn compare_costs(
         .into_iter()
         .map(|(service, (cur, prev))| {
             let change = cur - prev;
-            let change_pct = if prev > 0.0 { Some((change / prev) * 100.0) } else { None };
-            ServiceComparison { service, current_usd: cur, previous_usd: prev, change_usd: change, change_pct }
+            let change_pct = if prev > 0.0 {
+                Some((change / prev) * 100.0)
+            } else {
+                None
+            };
+            ServiceComparison {
+                service,
+                current_usd: cur,
+                previous_usd: prev,
+                change_usd: change,
+                change_pct,
+            }
         })
         .collect();
-    by_service.sort_by(|a, b| b.change_usd.abs().partial_cmp(&a.change_usd.abs()).unwrap_or(std::cmp::Ordering::Equal));
+    by_service.sort_by(|a, b| {
+        b.change_usd
+            .abs()
+            .partial_cmp(&a.change_usd.abs())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     Ok(CostComparison {
-        current_period: CostPeriod { start: cur_start, end: cur_end, total_usd: cur_total },
-        previous_period: CostPeriod { start: prev_start, end: prev_end, total_usd: prev_total },
+        current_period: CostPeriod {
+            start: cur_start,
+            end: cur_end,
+            total_usd: cur_total,
+        },
+        previous_period: CostPeriod {
+            start: prev_start,
+            end: prev_end,
+            total_usd: prev_total,
+        },
         total_change_usd: total_change,
         total_change_pct,
         by_service,
@@ -178,9 +212,9 @@ pub struct SpUtilization {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SpRecommendation {
-    pub savings_plan_type: String,      // "COMPUTE_SP" | "EC2_INSTANCE_SP" | "SAGEMAKER_SP"
-    pub term: String,                   // "ONE_YEAR" | "THREE_YEAR"
-    pub payment_option: String,         // "NO_UPFRONT" | "PARTIAL_UPFRONT" | "ALL_UPFRONT"
+    pub savings_plan_type: String, // "COMPUTE_SP" | "EC2_INSTANCE_SP" | "SAGEMAKER_SP"
+    pub term: String,              // "ONE_YEAR" | "THREE_YEAR"
+    pub payment_option: String,    // "NO_UPFRONT" | "PARTIAL_UPFRONT" | "ALL_UPFRONT"
     pub hourly_commitment_usd: f64,
     pub estimated_monthly_savings_usd: f64,
     pub estimated_savings_pct: f64,
@@ -228,21 +262,42 @@ async fn fetch_sp_utilization(
         "Granularity": "MONTHLY",
     }))?;
 
-    let data = ce_call(client, creds, "AWSInsightsIndexService.GetSavingsPlansUtilization", &body).await?;
+    let data = ce_call(
+        client,
+        creds,
+        "AWSInsightsIndexService.GetSavingsPlansUtilization",
+        &body,
+    )
+    .await?;
     let v: serde_json::Value = serde_json::from_slice(&data)?;
     let total = &v["Total"]["Utilization"];
 
-    let commitment: f64 = total["TotalCommitment"].as_str().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+    let commitment: f64 = total["TotalCommitment"]
+        .as_str()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0.0);
     if commitment == 0.0 {
         return Ok(None); // No Savings Plans in this account
     }
 
     Ok(Some(SpUtilization {
         total_commitment_usd: commitment,
-        used_commitment_usd: total["UsedCommitment"].as_str().and_then(|s| s.parse().ok()).unwrap_or(0.0),
-        unused_commitment_usd: total["UnusedCommitment"].as_str().and_then(|s| s.parse().ok()).unwrap_or(0.0),
-        utilization_pct: total["UtilizationPercentage"].as_str().and_then(|s| s.parse().ok()).unwrap_or(0.0),
-        net_savings_usd: v["Total"]["Savings"]["NetSavings"].as_str().and_then(|s| s.parse().ok()).unwrap_or(0.0),
+        used_commitment_usd: total["UsedCommitment"]
+            .as_str()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0.0),
+        unused_commitment_usd: total["UnusedCommitment"]
+            .as_str()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0.0),
+        utilization_pct: total["UtilizationPercentage"]
+            .as_str()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0.0),
+        net_savings_usd: v["Total"]["Savings"]["NetSavings"]
+            .as_str()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0.0),
     }))
 }
 
@@ -261,11 +316,23 @@ async fn fetch_sp_coverage(
         "Granularity": "MONTHLY",
     }))?;
 
-    let data = ce_call(client, creds, "AWSInsightsIndexService.GetSavingsPlansCoverage", &body).await?;
+    let data = ce_call(
+        client,
+        creds,
+        "AWSInsightsIndexService.GetSavingsPlansCoverage",
+        &body,
+    )
+    .await?;
     let v: serde_json::Value = serde_json::from_slice(&data)?;
     let coverage = &v["Total"]["Coverage"];
-    let pct: f64 = coverage["CoveragePercentage"].as_str().and_then(|s| s.parse().ok()).unwrap_or(0.0);
-    let uncovered: f64 = coverage["OnDemandCost"].as_str().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+    let pct: f64 = coverage["CoveragePercentage"]
+        .as_str()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0.0);
+    let uncovered: f64 = coverage["OnDemandCost"]
+        .as_str()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0.0);
 
     if pct == 0.0 && uncovered == 0.0 {
         return Ok(None);
@@ -295,16 +362,29 @@ async fn fetch_sp_recommendations(
             "AccountScope": "PAYER",
         }))?;
 
-        match ce_call(client, creds, "AWSInsightsIndexService.GetSavingsPlansPurchaseRecommendation", &body).await {
+        match ce_call(
+            client,
+            creds,
+            "AWSInsightsIndexService.GetSavingsPlansPurchaseRecommendation",
+            &body,
+        )
+        .await
+        {
             Ok(data) => {
                 let v: serde_json::Value = serde_json::from_slice(&data).unwrap_or_default();
                 if let Some(summary) = v.get("SavingsPlansPurchaseRecommendationSummary") {
                     let hourly: f64 = summary["EstimatedMonthlySavingsAmount"]
-                        .as_str().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+                        .as_str()
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(0.0);
                     let savings_pct: f64 = summary["EstimatedSavingsPercentage"]
-                        .as_str().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+                        .as_str()
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(0.0);
                     let hourly_commitment: f64 = summary["HourlyCommitmentToPurchase"]
-                        .as_str().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+                        .as_str()
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(0.0);
 
                     if hourly > 0.0 {
                         recs.push(SpRecommendation {
@@ -323,7 +403,11 @@ async fn fetch_sp_recommendations(
     }
 
     // Sort by savings descending
-    recs.sort_by(|a, b| b.estimated_monthly_savings_usd.partial_cmp(&a.estimated_monthly_savings_usd).unwrap_or(std::cmp::Ordering::Equal));
+    recs.sort_by(|a, b| {
+        b.estimated_monthly_savings_usd
+            .partial_cmp(&a.estimated_monthly_savings_usd)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     Ok(recs)
 }
 
@@ -473,11 +557,19 @@ pub async fn get_data_transfer_breakdown(
         .into_iter()
         .map(|(usage_type, amount_usd)| {
             let description = describe_usage_type(&usage_type);
-            DataTransferEntry { usage_type, description, amount_usd }
+            DataTransferEntry {
+                usage_type,
+                description,
+                amount_usd,
+            }
         })
         .collect();
 
-    entries.sort_by(|a, b| b.amount_usd.partial_cmp(&a.amount_usd).unwrap_or(std::cmp::Ordering::Equal));
+    entries.sort_by(|a, b| {
+        b.amount_usd
+            .partial_cmp(&a.amount_usd)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     Ok(entries)
 }
 
@@ -545,7 +637,8 @@ async fn get_costs_grouped(
     let mut next_token: Option<String> = None;
 
     loop {
-        let (entries, token) = fetch_page(client, creds, start, end, next_token.as_deref(), group_by).await?;
+        let (entries, token) =
+            fetch_page(client, creds, start, end, next_token.as_deref(), group_by).await?;
         all.extend(entries);
         match token {
             Some(t) if !t.is_empty() => next_token = Some(t),
@@ -553,7 +646,11 @@ async fn get_costs_grouped(
         }
     }
 
-    all.sort_by(|a, b| b.amount_usd.partial_cmp(&a.amount_usd).unwrap_or(std::cmp::Ordering::Equal));
+    all.sort_by(|a, b| {
+        b.amount_usd
+            .partial_cmp(&a.amount_usd)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     Ok(all)
 }
 

@@ -7,19 +7,16 @@ use super::auth::{access_token, GcpCreds};
 
 #[derive(Debug, Clone)]
 pub struct CloudFunction {
-    pub name: String,       // short name
-    pub full_name: String,  // projects/*/locations/*/functions/*
-    pub runtime: String,    // e.g. "python311", "nodejs20", "go121"
-    pub state: String,      // "ACTIVE", "FAILED", "DEPLOYING"
+    pub name: String,      // short name
+    pub full_name: String, // projects/*/locations/*/functions/*
+    pub runtime: String,   // e.g. "python311", "nodejs20", "go121"
+    pub state: String,     // "ACTIVE", "FAILED", "DEPLOYING"
     pub region: String,
     pub memory_mb: u32,
     pub update_time: Option<String>,
 }
 
-pub async fn list_functions(
-    http: &Client,
-    creds: &GcpCreds,
-) -> Result<Vec<CloudFunction>> {
+pub async fn list_functions(http: &Client, creds: &GcpCreds) -> Result<Vec<CloudFunction>> {
     let token = access_token(http, creds).await?;
     let mut out = Vec::new();
     let mut page_token: Option<String> = None;
@@ -66,7 +63,10 @@ pub async fn list_functions(
                     if s.ends_with('M') {
                         s.trim_end_matches('M').parse().ok()
                     } else if s.ends_with("Gi") {
-                        s.trim_end_matches("Gi").parse::<u32>().ok().map(|g| g * 1024)
+                        s.trim_end_matches("Gi")
+                            .parse::<u32>()
+                            .ok()
+                            .map(|g| g * 1024)
                     } else {
                         s.parse().ok()
                     }

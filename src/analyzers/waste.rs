@@ -5,21 +5,11 @@ use std::collections::{HashMap, HashSet};
 
 use crate::clouds::aws::{
     auth::{assume_role, AwsCreds},
-    cloudwatch,
-    cloudwatch_logs,
-    compute_optimizer,
-    dynamodb,
+    cloudwatch, cloudwatch_logs, compute_optimizer, dynamodb,
     ec2::{self, EbsVolume},
-    ecs,
-    elasticache,
-    elb,
-    lambda,
-    nat_gateway,
-    organizations,
-    pricing,
+    ecs, elasticache, elb, lambda, nat_gateway, organizations, pricing,
     pricing_api::PriceCache,
-    rds,
-    s3,
+    rds, s3,
 };
 
 /// A single waste or optimisation finding.
@@ -255,7 +245,9 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
     // Fetch CPU stats for running instances (14 days covers both idle + oversized checks)
     let mut cpu_stats: HashMap<String, cloudwatch::CpuStats> = HashMap::new();
     for (region, ids) in &running_by_region {
-        if let Ok(stats) = cloudwatch::ec2_cpu_stats(client, creds, region, ids, OVERSIZED_DAYS).await {
+        if let Ok(stats) =
+            cloudwatch::ec2_cpu_stats(client, creds, region, ids, OVERSIZED_DAYS).await
+        {
             for s in stats {
                 cpu_stats.insert(s.resource_id.clone(), s);
             }
@@ -271,15 +263,14 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
     let _ = instance_ami_ids; // suppress unused warning; AMI check uses age-based heuristic
 
     for inst in &instances {
-        let monthly = prices.ec2_monthly(&inst.instance_type, &inst.region).unwrap_or(0.0);
+        let monthly = prices
+            .ec2_monthly(&inst.instance_type, &inst.region)
+            .unwrap_or(0.0);
 
         // Stopped instances still incur EBS costs
         if inst.state == "stopped" {
             let stale_threshold = Utc::now() - Duration::days(STOPPED_STALE_DAYS);
-            let is_stale = inst
-                .stopped_at
-                .map(|t| t < stale_threshold)
-                .unwrap_or(true); // unknown stop time → assume stale
+            let is_stale = inst.stopped_at.map(|t| t < stale_threshold).unwrap_or(true); // unknown stop time → assume stale
 
             if is_stale {
                 let days_stopped = inst
@@ -323,7 +314,8 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
                             IDLE_DAYS,
                         ),
                         estimated_monthly_usd: monthly,
-                        action: "Stop or terminate if unused. Consider Savings Plan if needed.".into(),
+                        action: "Stop or terminate if unused. Consider Savings Plan if needed."
+                            .into(),
                         account_id: None,
                         account_name: None,
                     });
@@ -411,7 +403,9 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
 
     let mut rds_cpu: HashMap<String, cloudwatch::CpuStats> = HashMap::new();
     for (region, ids) in &rds_running_by_region {
-        if let Ok(stats) = cloudwatch::rds_cpu_stats(client, creds, region, ids, OVERSIZED_DAYS).await {
+        if let Ok(stats) =
+            cloudwatch::rds_cpu_stats(client, creds, region, ids, OVERSIZED_DAYS).await
+        {
             for s in stats {
                 rds_cpu.insert(s.resource_id.clone(), s);
             }
@@ -419,7 +413,9 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
     }
 
     for db in &rds_instances {
-        let monthly = prices.rds_monthly(&db.instance_class, &db.region).unwrap_or(0.0);
+        let monthly = prices
+            .rds_monthly(&db.instance_class, &db.region)
+            .unwrap_or(0.0);
         if let Some(stats) = rds_cpu.get(&db.id) {
             if stats.sample_count > 0 && stats.avg_percent < IDLE_CPU_PCT {
                 findings.push(WasteItem {
@@ -476,7 +472,9 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
                     issue: WasteKind::ExpiringReservedInstance,
                     detail: format!(
                         "RI {} for {} x{} is {} ({})",
-                        ri.id, ri.instance_type, ri.instance_count,
+                        ri.id,
+                        ri.instance_type,
+                        ri.instance_count,
                         status,
                         if days_left < 0 {
                             format!("expired {} days ago", -days_left)
@@ -485,7 +483,9 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
                         },
                     ),
                     estimated_monthly_usd: ri.monthly_cost_usd,
-                    action: "Renew, convert to Savings Plan, or switch to on-demand if workload changed".into(),
+                    action:
+                        "Renew, convert to Savings Plan, or switch to on-demand if workload changed"
+                            .into(),
                     account_id: None,
                     account_name: None,
                 });
@@ -505,7 +505,9 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
 
         if let Some(created) = ami.creation_date {
             if created < ami_age_threshold {
-                let total_snap_gb: u64 = ami.snapshot_ids.iter()
+                let total_snap_gb: u64 = ami
+                    .snapshot_ids
+                    .iter()
                     .filter_map(|sid| snapshots.iter().find(|s| s.id == *sid))
                     .map(|s| s.volume_size_gb)
                     .sum();
@@ -525,7 +527,8 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
                         total_snap_gb,
                     ),
                     estimated_monthly_usd: savings,
-                    action: "Deregister AMI and delete backing snapshots if no longer needed".into(),
+                    action: "Deregister AMI and delete backing snapshots if no longer needed"
+                        .into(),
                     account_id: None,
                     account_name: None,
                 });
@@ -593,7 +596,8 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
 
     // Key pairs in regions with no instances are likely unused.
     // Conservative approach: we don't track per-instance key names in our parser.
-    let regions_with_instances: HashSet<String> = instances.iter().map(|i| i.region.clone()).collect();
+    let regions_with_instances: HashSet<String> =
+        instances.iter().map(|i| i.region.clone()).collect();
 
     for kp in &key_pairs {
         // Only flag key pairs in regions with no instances — conservative approach
@@ -667,7 +671,8 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
                     bucket.name, bucket.incomplete_multipart_count,
                 ),
                 estimated_monthly_usd: 0.0, // can't estimate without knowing part sizes
-                action: "Abort incomplete multipart uploads and add a lifecycle rule to auto-abort".into(),
+                action: "Abort incomplete multipart uploads and add a lifecycle rule to auto-abort"
+                    .into(),
                 account_id: None,
                 account_name: None,
             });
@@ -689,7 +694,8 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
                 lg.name, stored_gb,
             ),
             estimated_monthly_usd: storage_cost,
-            action: "Set a retention period (e.g. 30, 90, or 365 days) to control storage costs".into(),
+            action: "Set a retention period (e.g. 30, 90, or 365 days) to control storage costs"
+                .into(),
             account_id: None,
             account_name: None,
         });
@@ -743,7 +749,8 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
                     ),
                     estimated_monthly_usd: wasted_cost,
                     action: "Investigate CloudWatch Logs for error root cause. \
-                             Fix the underlying issue — every failed invocation is billed.".into(),
+                             Fix the underlying issue — every failed invocation is billed."
+                        .into(),
                     account_id: None,
                     account_name: None,
                 });
@@ -754,26 +761,45 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
     // ── DynamoDB analysis ─────────────────────────────────────────────────────
 
     for table in &dynamo_tables {
-        let full_monthly = pricing::dynamodb_provisioned_monthly(table.provisioned_rcu, table.provisioned_wcu);
+        let full_monthly =
+            pricing::dynamodb_provisioned_monthly(table.provisioned_rcu, table.provisioned_wcu);
 
         // Derive average hourly consumption from CloudWatch data
         let avg_hourly_rcu = if table.hourly_consumed_rcu.is_empty() {
             None
         } else {
-            Some(table.hourly_consumed_rcu.iter().sum::<f64>() / table.hourly_consumed_rcu.len() as f64)
+            Some(
+                table.hourly_consumed_rcu.iter().sum::<f64>()
+                    / table.hourly_consumed_rcu.len() as f64,
+            )
         };
         let avg_hourly_wcu = if table.hourly_consumed_wcu.is_empty() {
             None
         } else {
-            Some(table.hourly_consumed_wcu.iter().sum::<f64>() / table.hourly_consumed_wcu.len() as f64)
+            Some(
+                table.hourly_consumed_wcu.iter().sum::<f64>()
+                    / table.hourly_consumed_wcu.len() as f64,
+            )
         };
 
         // Max available per hour = provisioned × 3600 seconds
         let max_rcu_per_hour = table.provisioned_rcu as f64 * 3600.0;
         let max_wcu_per_hour = table.provisioned_wcu as f64 * 3600.0;
 
-        let rcu_util = avg_hourly_rcu.map(|c| if max_rcu_per_hour > 0.0 { c / max_rcu_per_hour } else { 0.0 });
-        let wcu_util = avg_hourly_wcu.map(|c| if max_wcu_per_hour > 0.0 { c / max_wcu_per_hour } else { 0.0 });
+        let rcu_util = avg_hourly_rcu.map(|c| {
+            if max_rcu_per_hour > 0.0 {
+                c / max_rcu_per_hour
+            } else {
+                0.0
+            }
+        });
+        let wcu_util = avg_hourly_wcu.map(|c| {
+            if max_wcu_per_hour > 0.0 {
+                c / max_wcu_per_hour
+            } else {
+                0.0
+            }
+        });
 
         let max_util = match (rcu_util, wcu_util) {
             (Some(r), Some(w)) => Some(f64::max(r, w)),
@@ -841,7 +867,8 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
     // ── ElastiCache analysis ─────────────────────────────────────────────────
 
     for cluster in &elasticache_clusters {
-        let monthly = prices.elasticache_monthly(&cluster.node_type, cluster.num_nodes, &cluster.region)
+        let monthly = prices
+            .elasticache_monthly(&cluster.node_type, cluster.num_nodes, &cluster.region)
             .unwrap_or(0.0);
 
         // Idle: near-zero connections over 14 days
@@ -859,12 +886,17 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
                 issue: WasteKind::IdleElastiCache,
                 detail: format!(
                     "ElastiCache '{}' ({} {} x{} {}) peak {} connections in 14 days — appears idle",
-                    cluster.cluster_id, cluster.engine, cluster.node_type,
-                    cluster.num_nodes, cluster.engine_version, peak,
+                    cluster.cluster_id,
+                    cluster.engine,
+                    cluster.node_type,
+                    cluster.num_nodes,
+                    cluster.engine_version,
+                    peak,
                 ),
                 estimated_monthly_usd: monthly,
                 action: "Delete cluster if no longer needed. Check application connection strings \
-                         and DNS CNAMEs before removing.".into(),
+                         and DNS CNAMEs before removing."
+                    .into(),
                 account_id: None,
                 account_name: None,
             });
@@ -933,7 +965,9 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
         if is_idle {
             let bytes_gb = gw.bytes_out_14d.unwrap_or(0) as f64 / 1_073_741_824.0;
             let conns = gw.active_connections_max.unwrap_or(0);
-            let name_part = gw.name.as_deref()
+            let name_part = gw
+                .name
+                .as_deref()
                 .map(|n| format!(" '{n}'"))
                 .unwrap_or_default();
 
@@ -1119,9 +1153,8 @@ pub async fn analyse_org(
                     mgmt_creds
                 } else {
                     // Member account — assume the member role (deployed via StackSet)
-                    let member_arn = format!(
-                        "arn:aws:iam::{account_id}:role/MunbotFinOpsMemberRole"
-                    );
+                    let member_arn =
+                        format!("arn:aws:iam::{account_id}:role/MunbotFinOpsMemberRole");
                     match assume_role(&client, &member_arn, None).await {
                         Ok(c) => c,
                         Err(_) => return (account_id, account_name, None), // StackSet not deployed yet

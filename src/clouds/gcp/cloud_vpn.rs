@@ -20,15 +20,12 @@ pub struct CloudVpn {
 #[derive(Debug, Clone)]
 pub struct VpnTunnel {
     pub name: String,
-    pub status: String,    // "ESTABLISHED", "NO_INCOMING_PACKETS", etc.
+    pub status: String, // "ESTABLISHED", "NO_INCOMING_PACKETS", etc.
     pub peer_ip: String,
     pub ike_version: u32,
 }
 
-pub async fn list_vpn_gateways(
-    http: &Client,
-    creds: &GcpCreds,
-) -> Result<Vec<CloudVpn>> {
+pub async fn list_vpn_gateways(http: &Client, creds: &GcpCreds) -> Result<Vec<CloudVpn>> {
     let token = access_token(http, creds).await?;
     let project = &creds.project_id;
 
@@ -114,7 +111,11 @@ async fn fetch_gateways(
     let mut out = Vec::new();
 
     for (_key, region_data) in data["items"].as_object().cloned().unwrap_or_default() {
-        for gw in region_data["vpnGateways"].as_array().cloned().unwrap_or_default() {
+        for gw in region_data["vpnGateways"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+        {
             let self_link = gw["selfLink"].as_str().unwrap_or("").to_string();
             let name = gw["name"].as_str().unwrap_or("").to_string();
             let region = gw["region"]
@@ -191,7 +192,11 @@ async fn fetch_tunnels(
     let mut out = Vec::new();
 
     for (_key, region_data) in data["items"].as_object().cloned().unwrap_or_default() {
-        for tun in region_data["vpnTunnels"].as_array().cloned().unwrap_or_default() {
+        for tun in region_data["vpnTunnels"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+        {
             out.push(parse_tunnel(&tun));
         }
     }
@@ -257,9 +262,7 @@ fn parse_tunnel(tun: &serde_json::Value) -> (String, String, String, u32, String
 }
 
 async fn list_regions(http: &Client, token: &str, project: &str) -> Result<Vec<String>> {
-    let url = format!(
-        "https://compute.googleapis.com/compute/v1/projects/{project}/regions"
-    );
+    let url = format!("https://compute.googleapis.com/compute/v1/projects/{project}/regions");
     let resp = http.get(&url).bearer_auth(token).send().await?;
     if !resp.status().is_success() {
         return Ok(Vec::new());

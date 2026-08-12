@@ -1,7 +1,11 @@
 use anyhow::{anyhow, Result};
 use futures::future::join_all;
 
-use super::{as_items, auth::{sign, AwsCreds}, xml_to_value};
+use super::{
+    as_items,
+    auth::{sign, AwsCreds},
+    xml_to_value,
+};
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -34,9 +38,7 @@ pub async fn list_buckets_with_issues(
     let buckets_with_regions: Vec<(String, String)> = bucket_names
         .into_iter()
         .zip(locations)
-        .filter_map(|(name, region_result)| {
-            region_result.ok().map(|region| (name, region))
-        })
+        .filter_map(|(name, region_result)| region_result.ok().map(|region| (name, region)))
         .collect();
 
     // 3. Check each bucket for issues in parallel
@@ -59,11 +61,14 @@ pub async fn list_buckets_with_issues(
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 /// List all bucket names via the global S3 endpoint.
-async fn list_all_buckets(
-    client: &reqwest::Client,
-    creds: &AwsCreds,
-) -> Result<Vec<String>> {
-    let xml = s3_get(client, creds, "us-east-1", "https://s3.us-east-1.amazonaws.com/").await?;
+async fn list_all_buckets(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<String>> {
+    let xml = s3_get(
+        client,
+        creds,
+        "us-east-1",
+        "https://s3.us-east-1.amazonaws.com/",
+    )
+    .await?;
     let v = xml_to_value(&xml)?;
 
     let names = as_items(&v["Buckets"]["Bucket"])
@@ -151,16 +156,12 @@ async fn s3_get(
     region: &str,
     url: &str,
 ) -> Result<String> {
-    let creds_for_region = AwsCreds { region: region.to_string(), ..creds.clone() };
+    let creds_for_region = AwsCreds {
+        region: region.to_string(),
+        ..creds.clone()
+    };
 
-    let signed = sign(
-        &creds_for_region,
-        "GET",
-        url,
-        &[],
-        b"",
-        "s3",
-    )?;
+    let signed = sign(&creds_for_region, "GET", url, &[], b"", "s3")?;
 
     let mut req = client
         .get(url)

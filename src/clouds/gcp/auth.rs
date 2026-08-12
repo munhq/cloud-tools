@@ -48,10 +48,9 @@ fn read_adc_file() -> Result<String> {
     let home = std::env::var("HOME").context("HOME not set")?;
     let path = format!("{home}/.config/gcloud/application_default_credentials.json");
     std::fs::read_to_string(&path).with_context(|| {
-        format!(
-            "no ADC credentials found — run `gcloud auth application-default login` \
+        "no ADC credentials found — run `gcloud auth application-default login` \
              or set GOOGLE_APPLICATION_CREDENTIALS"
-        )
+            .to_string()
     })
 }
 

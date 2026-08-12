@@ -35,15 +35,18 @@ pub async fn get_costs_range(
     start: NaiveDate,
     end: NaiveDate,
 ) -> Result<Vec<CostEntry>> {
-    let table = creds.billing_table.as_ref()
-        .ok_or_else(|| anyhow!("billing_table not configured — set CLOUD_GCP_BILLING_TABLE for real cost data"))?;
+    let table = creds.billing_table.as_ref().ok_or_else(|| {
+        anyhow!("billing_table not configured — set CLOUD_GCP_BILLING_TABLE for real cost data")
+    })?;
     bigquery_costs(http, creds, table, start, end).await
 }
 
 /// Fair month-over-month comparison (same day window, like AWS CE compare).
 /// Only available with BigQuery billing export.
 pub async fn compare_costs(http: &Client, creds: &GcpCreds) -> Result<CostComparison> {
-    let table = creds.billing_table.as_ref()
+    let table = creds
+        .billing_table
+        .as_ref()
         .ok_or_else(|| anyhow!("billing_table not configured — needed for cost comparison"))?;
 
     let now = Utc::now().date_naive();
@@ -89,11 +92,10 @@ pub async fn compare_costs(http: &Client, creds: &GcpCreds) -> Result<CostCompar
 
 /// Get costs grouped by project (for multi-project/org scanning).
 /// Requires BigQuery billing export.
-pub async fn get_costs_by_project(
-    http: &Client,
-    creds: &GcpCreds,
-) -> Result<Vec<ProjectCost>> {
-    let table = creds.billing_table.as_ref()
+pub async fn get_costs_by_project(http: &Client, creds: &GcpCreds) -> Result<Vec<ProjectCost>> {
+    let table = creds
+        .billing_table
+        .as_ref()
         .ok_or_else(|| anyhow!("billing_table not configured"))?;
     let token = access_token(http, creds).await?;
 
@@ -196,9 +198,7 @@ async fn run_bq_query(
     project_id: &str,
     query: &str,
 ) -> Result<serde_json::Value> {
-    let url = format!(
-        "https://bigquery.googleapis.com/bigquery/v2/projects/{project_id}/queries"
-    );
+    let url = format!("https://bigquery.googleapis.com/bigquery/v2/projects/{project_id}/queries");
 
     let body = serde_json::json!({
         "query": query,
@@ -224,7 +224,9 @@ async fn run_bq_query(
 
     // Check if query completed
     if data["jobComplete"].as_bool() != Some(true) {
-        return Err(anyhow!("BigQuery query timed out — try a smaller date range"));
+        return Err(anyhow!(
+            "BigQuery query timed out — try a smaller date range"
+        ));
     }
 
     Ok(data)
@@ -275,10 +277,7 @@ async fn budgets_costs(http: &Client, creds: &GcpCreds) -> Result<Vec<CostEntry>
                 return None;
             }
             Some(CostEntry {
-                service: b["displayName"]
-                    .as_str()
-                    .unwrap_or("unknown")
-                    .to_string(),
+                service: b["displayName"].as_str().unwrap_or("unknown").to_string(),
                 amount_usd: amount,
                 period_start: start,
                 period_end: end,

@@ -27,17 +27,18 @@ pub struct EcsService {
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /// List all ECS services across all regions.
-pub async fn list_services(
-    client: &reqwest::Client,
-    creds: &AwsCreds,
-) -> Result<Vec<EcsService>> {
+pub async fn list_services(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<EcsService>> {
     let regions = list_regions(client, creds).await?;
     let tasks: Vec<_> = regions
         .iter()
         .map(|r| list_in_region(client, creds, r))
         .collect();
     let results = join_all(tasks).await;
-    Ok(results.into_iter().filter_map(|r| r.ok()).flatten().collect())
+    Ok(results
+        .into_iter()
+        .filter_map(|r| r.ok())
+        .flatten()
+        .collect())
 }
 
 // ── Region discovery ─────────────────────────────────────────────────────────
@@ -45,19 +46,28 @@ pub async fn list_services(
 async fn list_regions(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<String>> {
     let body = form_params(&[("Action", "DescribeRegions"), ("Version", "2016-11-15")]);
     let url = "https://ec2.us-east-1.amazonaws.com/";
-    let creds_for_region = AwsCreds { region: "us-east-1".into(), ..creds.clone() };
+    let creds_for_region = AwsCreds {
+        region: "us-east-1".into(),
+        ..creds.clone()
+    };
     let signed = sign(
-        &creds_for_region, "POST", url,
+        &creds_for_region,
+        "POST",
+        url,
         &[("content-type", "application/x-www-form-urlencoded")],
-        body.as_bytes(), "ec2",
+        body.as_bytes(),
+        "ec2",
     )?;
-    let mut req = client.post(url)
+    let mut req = client
+        .post(url)
         .header("content-type", "application/x-www-form-urlencoded")
         .header("x-amz-date", &signed.x_amz_date)
         .header("x-amz-content-sha256", &signed.x_amz_content_sha256)
         .header("authorization", &signed.authorization)
         .body(body);
-    if let Some(t) = &signed.x_amz_security_token { req = req.header("x-amz-security-token", t); }
+    if let Some(t) = &signed.x_amz_security_token {
+        req = req.header("x-amz-security-token", t);
+    }
     let resp = req.send().await?;
     let xml = resp.text().await?;
     let v = super::xml_to_value(&xml)?;
@@ -81,18 +91,23 @@ async fn list_in_region(
     }
 
     // Step 2: For each cluster, list and describe services
-    let tasks: Vec<_> = cluster_arns.iter().map(|arn| {
-        let client = client.clone();
-        let creds = creds.clone();
-        let region = region.to_string();
-        let arn = arn.clone();
-        async move {
-            list_services_in_cluster(&client, &creds, &region, &arn).await
-        }
-    }).collect();
+    let tasks: Vec<_> = cluster_arns
+        .iter()
+        .map(|arn| {
+            let client = client.clone();
+            let creds = creds.clone();
+            let region = region.to_string();
+            let arn = arn.clone();
+            async move { list_services_in_cluster(&client, &creds, &region, &arn).await }
+        })
+        .collect();
 
     let results = join_all(tasks).await;
-    Ok(results.into_iter().filter_map(|r| r.ok()).flatten().collect())
+    Ok(results
+        .into_iter()
+        .filter_map(|r| r.ok())
+        .flatten()
+        .collect())
 }
 
 async fn list_cluster_arns(
@@ -109,10 +124,14 @@ async fn list_cluster_arns(
             None => serde_json::json!({"maxResults": 100}),
         };
 
-        let resp = ecs_query(client, creds, region,
+        let resp = ecs_query(
+            client,
+            creds,
+            region,
             "AmazonEC2ContainerServiceV20141113.ListClusters",
             &serde_json::to_vec(&body)?,
-        ).await;
+        )
+        .await;
 
         let resp = match resp {
             Ok(r) => r,
@@ -158,10 +177,14 @@ async fn list_services_in_cluster(
             }),
         };
 
-        let resp = ecs_query(client, creds, region,
+        let resp = ecs_query(
+            client,
+            creds,
+            region,
             "AmazonEC2ContainerServiceV20141113.ListServices",
             &serde_json::to_vec(&body)?,
-        ).await?;
+        )
+        .await?;
 
         if let Some(arr) = resp["serviceArns"].as_array() {
             for arn in arr {
@@ -195,13 +218,16 @@ async fn list_services_in_cluster(
             "services": chunk,
         });
 
-        let resp = ecs_query(client, creds, region,
+        let resp = ecs_query(
+            client,
+            creds,
+            region,
             "AmazonEC2ContainerServiceV20141113.DescribeServices",
             &serde_json::to_vec(&body)?,
-        ).await?;
+        )
+        .await?;
 
-        let parsed: DescribeServicesResponse = serde_json::from_value(resp)
-            .unwrap_or_default();
+        let parsed: DescribeServicesResponse = serde_json::from_value(resp).unwrap_or_default();
 
         for svc in parsed.services {
             out.push(EcsService {
@@ -230,7 +256,10 @@ async fn ecs_query(
     body: &[u8],
 ) -> Result<serde_json::Value> {
     let url = format!("https://ecs.{region}.amazonaws.com/");
-    let creds_for_region = AwsCreds { region: region.to_string(), ..creds.clone() };
+    let creds_for_region = AwsCreds {
+        region: region.to_string(),
+        ..creds.clone()
+    };
 
     let signed = sign(
         &creds_for_region,

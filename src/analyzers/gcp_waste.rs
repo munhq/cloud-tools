@@ -9,29 +9,16 @@ use chrono::{DateTime, Duration, Utc};
 
 use super::waste::{OrgWasteReport, WasteItem, WasteKind};
 use crate::clouds::gcp::{
-    artifact_registry,
-    auth::GcpCreds,
-    cloud_functions,
-    cloud_ids,
-    cloud_run,
-    cloud_sql,
-    cloud_vpn,
-    commitments,
-    compute,
-    gke,
-    monitoring,
-    networking,
-    recommender,
-    resource_manager,
-    storage,
+    artifact_registry, auth::GcpCreds, cloud_functions, cloud_ids, cloud_run, cloud_sql, cloud_vpn,
+    commitments, compute, gke, monitoring, networking, recommender, resource_manager, storage,
 };
 
 // ── Thresholds ───────────────────────────────────────────────────────────────
 
-const IDLE_CPU_FRACTION: f64 = 0.05;     // 5% (GCP returns 0.0–1.0, not percentage)
+const IDLE_CPU_FRACTION: f64 = 0.05; // 5% (GCP returns 0.0–1.0, not percentage)
 const OVERSIZED_CPU_FRACTION: f64 = 0.20; // 20%
 const STALE_SNAPSHOT_DAYS: i64 = 90;
-const STATIC_IP_MONTHLY_USD: f64 = 7.30;  // $0.01/hr for unattached static IP
+const STATIC_IP_MONTHLY_USD: f64 = 7.30; // $0.01/hr for unattached static IP
 
 /// Previous-generation GCE machine type families.
 const PREV_GEN_FAMILIES: &[&str] = &["n1", "f1", "g1"];
@@ -99,7 +86,17 @@ pub async fn analyse(client: &reqwest::Client, creds: &GcpCreds) -> Result<Vec<W
 
     // Fetch all inventory in parallel (nested joins to avoid tuple size limits)
     let (
-        (disks_res, addresses_res, snapshots_res, sql_res, gke_res, functions_res, run_res, buckets_res, recommender_res),
+        (
+            disks_res,
+            addresses_res,
+            snapshots_res,
+            sql_res,
+            gke_res,
+            functions_res,
+            run_res,
+            buckets_res,
+            recommender_res,
+        ),
         (ids_res, artifact_res, vpn_res),
     ) = tokio::join!(
         async {
@@ -174,10 +171,12 @@ pub async fn analyse(client: &reqwest::Client, creds: &GcpCreds) -> Result<Vec<W
                 detail: format!(
                     "GCE instance '{}' ({}) is {} — persistent disk costs still accruing",
                     inst.name.as_deref().unwrap_or(&inst.resource_id),
-                    machine_type, status,
+                    machine_type,
+                    status,
                 ),
                 estimated_monthly_usd: monthly * 0.1, // disk cost estimate
-                action: "Delete instance if no longer needed, or create machine image and delete".into(),
+                action: "Delete instance if no longer needed, or create machine image and delete"
+                    .into(),
                 account_id: None,
                 account_name: None,
             });
@@ -208,9 +207,9 @@ pub async fn analyse(client: &reqwest::Client, creds: &GcpCreds) -> Result<Vec<W
 
         // Running — check CPU via Cloud Monitoring
         if status == "RUNNING" {
-            if let Ok(Some(avg_cpu)) = monitoring::gce_cpu_avg(
-                client, creds, &inst.resource_id, zone, 14,
-            ).await {
+            if let Ok(Some(avg_cpu)) =
+                monitoring::gce_cpu_avg(client, creds, &inst.resource_id, zone, 14).await
+            {
                 if avg_cpu < IDLE_CPU_FRACTION {
                     findings.push(WasteItem {
                         resource_id: inst.resource_id.clone(),
@@ -236,10 +235,13 @@ pub async fn analyse(client: &reqwest::Client, creds: &GcpCreds) -> Result<Vec<W
                         detail: format!(
                             "GCE '{}' ({}) avg CPU {:.1}% over 14 days — likely oversized",
                             inst.name.as_deref().unwrap_or(&inst.resource_id),
-                            machine_type, avg_cpu * 100.0,
+                            machine_type,
+                            avg_cpu * 100.0,
                         ),
                         estimated_monthly_usd: monthly * 0.5,
-                        action: format!("Consider downsizing from {machine_type} to a smaller machine type"),
+                        action: format!(
+                            "Consider downsizing from {machine_type} to a smaller machine type"
+                        ),
                         account_id: None,
                         account_name: None,
                     });
@@ -263,7 +265,8 @@ pub async fn analyse(client: &reqwest::Client, creds: &GcpCreds) -> Result<Vec<W
                     disk.name, disk.size_gb, disk.disk_type,
                 ),
                 estimated_monthly_usd: monthly,
-                action: "Delete disk or snapshot and delete. Verify no workloads reference it.".into(),
+                action: "Delete disk or snapshot and delete. Verify no workloads reference it."
+                    .into(),
                 account_id: None,
                 account_name: None,
             });
@@ -357,7 +360,9 @@ pub async fn analyse(client: &reqwest::Client, creds: &GcpCreds) -> Result<Vec<W
                         issue: WasteKind::OversizedCloudSql,
                         detail: format!(
                             "Cloud SQL '{}' ({} {}) avg CPU {:.1}% over 14 days — oversized",
-                            inst.name, inst.database_version, inst.tier,
+                            inst.name,
+                            inst.database_version,
+                            inst.tier,
                             avg_cpu * 100.0,
                         ),
                         estimated_monthly_usd: monthly * 0.5,
@@ -401,48 +406,42 @@ pub async fn analyse(client: &reqwest::Client, creds: &GcpCreds) -> Result<Vec<W
         if func.state != "ACTIVE" {
             continue;
         }
-        match monitoring::cloud_function_invocations(client, creds, &func.name, 30).await {
-            Ok(invocations) if invocations == 0 => {
-                findings.push(WasteItem {
-                    resource_id: func.full_name.clone(),
-                    resource_type: "cloud_function".into(),
-                    region: func.region.clone(),
-                    issue: WasteKind::IdleCloudFunction,
-                    detail: format!(
-                        "Cloud Function '{}' ({} {}MB) had 0 invocations in 30 days",
-                        func.name, func.runtime, func.memory_mb,
-                    ),
-                    estimated_monthly_usd: 0.0, // billed per invocation
-                    action: "Delete function to reduce attack surface. Check Cloud Scheduler and Pub/Sub triggers first.".into(),
-                    account_id: None,
-                    account_name: None,
-                });
-            }
-            _ => {}
+        if let Ok(0) = monitoring::cloud_function_invocations(client, creds, &func.name, 30).await {
+            findings.push(WasteItem {
+                resource_id: func.full_name.clone(),
+                resource_type: "cloud_function".into(),
+                region: func.region.clone(),
+                issue: WasteKind::IdleCloudFunction,
+                detail: format!(
+                    "Cloud Function '{}' ({} {}MB) had 0 invocations in 30 days",
+                    func.name, func.runtime, func.memory_mb,
+                ),
+                estimated_monthly_usd: 0.0, // billed per invocation
+                action: "Delete function to reduce attack surface. Check Cloud Scheduler and Pub/Sub triggers first.".into(),
+                account_id: None,
+                account_name: None,
+            });
         }
     }
 
     // ── Cloud Run Services ───────────────────────────────────────────────
 
     for svc in &run_services {
-        match monitoring::cloud_run_requests(client, creds, &svc.name, 30).await {
-            Ok(requests) if requests == 0 => {
-                findings.push(WasteItem {
-                    resource_id: svc.full_name.clone(),
-                    resource_type: "cloud_run_service".into(),
-                    region: svc.region.clone(),
-                    issue: WasteKind::IdleCloudRunService,
-                    detail: format!(
-                        "Cloud Run service '{}' in {} had 0 requests in 30 days",
-                        svc.name, svc.region,
-                    ),
-                    estimated_monthly_usd: 0.0, // billed per request (scale-to-zero)
-                    action: "Delete service if no longer needed. Check for custom domains or integrations first.".into(),
-                    account_id: None,
-                    account_name: None,
-                });
-            }
-            _ => {}
+        if let Ok(0) = monitoring::cloud_run_requests(client, creds, &svc.name, 30).await {
+            findings.push(WasteItem {
+                resource_id: svc.full_name.clone(),
+                resource_type: "cloud_run_service".into(),
+                region: svc.region.clone(),
+                issue: WasteKind::IdleCloudRunService,
+                detail: format!(
+                    "Cloud Run service '{}' in {} had 0 requests in 30 days",
+                    svc.name, svc.region,
+                ),
+                estimated_monthly_usd: 0.0, // billed per request (scale-to-zero)
+                action: "Delete service if no longer needed. Check for custom domains or integrations first.".into(),
+                account_id: None,
+                account_name: None,
+            });
         }
     }
 
@@ -469,7 +468,9 @@ pub async fn analyse(client: &reqwest::Client, creds: &GcpCreds) -> Result<Vec<W
 
     // ── Committed Use Discounts (CUDs) ─────────────────────────────────
 
-    let cuds = commitments::list_commitments(client, creds).await.unwrap_or_default();
+    let cuds = commitments::list_commitments(client, creds)
+        .await
+        .unwrap_or_default();
     let cud_expiry_threshold = now + Duration::days(30);
 
     for cud in &cuds {
@@ -481,7 +482,9 @@ pub async fn analyse(client: &reqwest::Client, creds: &GcpCreds) -> Result<Vec<W
                 if end_time < cud_expiry_threshold {
                     let days_left = (end_time - now).num_days();
                     let status_text = if days_left < 0 { "EXPIRED" } else { "expiring" };
-                    let resources_desc: Vec<String> = cud.resources.iter()
+                    let resources_desc: Vec<String> = cud
+                        .resources
+                        .iter()
                         .map(|r| format!("{} {}", r.amount, r.resource_type))
                         .collect();
 
@@ -523,7 +526,9 @@ pub async fn analyse(client: &reqwest::Client, creds: &GcpCreds) -> Result<Vec<W
             t if t.contains("disk.Idle") => ("gcp_persistent_disk", "idle"),
             t if t.contains("address.Idle") => ("gcp_static_ip", "idle"),
             t if t.contains("cloudsql") && t.contains("Idle") => ("cloud_sql_instance", "idle"),
-            t if t.contains("cloudsql") && t.contains("Overprovisioned") => ("cloud_sql_instance", "over-provisioned"),
+            t if t.contains("cloudsql") && t.contains("Overprovisioned") => {
+                ("cloud_sql_instance", "over-provisioned")
+            }
             _ => ("gcp_resource", "optimization recommended"),
         };
 
@@ -536,7 +541,11 @@ pub async fn analyse(client: &reqwest::Client, creds: &GcpCreds) -> Result<Vec<W
                 "GCP Recommender: {} — {} ({})",
                 rec.resource_name,
                 issue_detail,
-                if rec.description.is_empty() { &rec.subtype } else { &rec.description },
+                if rec.description.is_empty() {
+                    &rec.subtype
+                } else {
+                    &rec.description
+                },
             ),
             estimated_monthly_usd: rec.estimated_monthly_savings_usd,
             action: format!(
@@ -698,10 +707,7 @@ pub async fn analyse(client: &reqwest::Client, creds: &GcpCreds) -> Result<Vec<W
 ///
 /// Discovers projects via Cloud Resource Manager, then analyses each in parallel.
 /// This is the GCP equivalent of AWS `analyse_org`.
-pub async fn analyse_org(
-    client: &reqwest::Client,
-    creds: &GcpCreds,
-) -> Result<OrgWasteReport> {
+pub async fn analyse_org(client: &reqwest::Client, creds: &GcpCreds) -> Result<OrgWasteReport> {
     let projects = resource_manager::list_projects(client, creds).await?;
     let total_accounts = projects.len();
 

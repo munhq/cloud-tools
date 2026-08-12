@@ -13,13 +13,10 @@ pub struct CloudSqlInstance {
     pub state: String,            // "RUNNABLE", "STOPPED", "SUSPENDED"
     pub region: String,
     pub data_disk_size_gb: u64,
-    pub data_disk_type: String,   // "PD_SSD", "PD_HDD"
+    pub data_disk_type: String, // "PD_SSD", "PD_HDD"
 }
 
-pub async fn list_instances(
-    http: &Client,
-    creds: &GcpCreds,
-) -> Result<Vec<CloudSqlInstance>> {
+pub async fn list_instances(http: &Client, creds: &GcpCreds) -> Result<Vec<CloudSqlInstance>> {
     let token = access_token(http, creds).await?;
     let url = format!(
         "https://sqladmin.googleapis.com/v1/projects/{}/instances",

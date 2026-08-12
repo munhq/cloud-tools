@@ -215,7 +215,15 @@ pub fn sign(
     body: &[u8],
     service: &str,
 ) -> Result<SignedHeaders> {
-    sign_at(creds, method, url, extra_headers, body, service, &Utc::now())
+    sign_at(
+        creds,
+        method,
+        url,
+        extra_headers,
+        body,
+        service,
+        &Utc::now(),
+    )
 }
 
 /// Same as `sign` but with an injectable datetime — use in tests.
@@ -229,7 +237,7 @@ pub fn sign_at(
     now: &DateTime<Utc>,
 ) -> Result<SignedHeaders> {
     let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string(); // "20260301T120000Z"
-    let date = now.format("%Y%m%d").to_string();              // "20260301"
+    let date = now.format("%Y%m%d").to_string(); // "20260301"
 
     let parsed = parse_url(url)?;
     let body_hash = sha256_hex(body);
@@ -266,10 +274,7 @@ pub fn sign_at(
     }
 
     // "name:value\n" for each header, all concatenated
-    let canonical_headers: String = deduped
-        .iter()
-        .map(|(k, v)| format!("{k}:{v}\n"))
-        .collect();
+    let canonical_headers: String = deduped.iter().map(|(k, v)| format!("{k}:{v}\n")).collect();
 
     // "name1;name2;name3"
     let signed_headers: String = deduped
@@ -283,8 +288,7 @@ pub fn sign_at(
     // the required blank line between headers and signed-headers.
     let canonical_request = format!(
         "{method}\n{}\n{}\n{canonical_headers}\n{signed_headers}\n{body_hash}",
-        parsed.path,
-        parsed.canonical_query,
+        parsed.path, parsed.canonical_query,
     );
 
     // ── Step 3: String to sign ──────────────────────────────────────────────────
@@ -371,7 +375,10 @@ fn parse_url(url: &str) -> Result<ParsedUrl> {
             .filter(|p| !p.is_empty())
             .map(|p| {
                 let (k, v) = p.split_once('=').unwrap_or((p, ""));
-                (urlencoding::encode(k).into_owned(), urlencoding::encode(v).into_owned())
+                (
+                    urlencoding::encode(k).into_owned(),
+                    urlencoding::encode(v).into_owned(),
+                )
             })
             .collect();
         pairs.sort();
@@ -428,7 +435,10 @@ mod tests {
 
     #[test]
     fn parse_url_with_query_sorts_params() {
-        let p = parse_url("https://ec2.us-east-1.amazonaws.com/?Version=2016-11-15&Action=DescribeInstances").unwrap();
+        let p = parse_url(
+            "https://ec2.us-east-1.amazonaws.com/?Version=2016-11-15&Action=DescribeInstances",
+        )
+        .unwrap();
         // Sorted: Action before Version
         assert!(p.canonical_query.starts_with("Action="));
         assert!(p.canonical_query.contains("&Version="));
@@ -492,9 +502,7 @@ mod tests {
             &test_creds(),
             "POST",
             "https://ec2.us-east-1.amazonaws.com/",
-            &[
-                ("content-type", "application/x-www-form-urlencoded"),
-            ],
+            &[("content-type", "application/x-www-form-urlencoded")],
             b"Action=DescribeInstances&Version=2016-11-15",
             "ec2",
             &fixed_time(),
@@ -502,7 +510,8 @@ mod tests {
         .unwrap();
 
         // Extract signed headers from authorization string
-        let sh_start = result.authorization.find("SignedHeaders=").unwrap() + "SignedHeaders=".len();
+        let sh_start =
+            result.authorization.find("SignedHeaders=").unwrap() + "SignedHeaders=".len();
         let sh_end = result.authorization.find(", Signature=").unwrap();
         let signed_headers = &result.authorization[sh_start..sh_end];
 

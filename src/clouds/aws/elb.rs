@@ -1,7 +1,11 @@
 use anyhow::{anyhow, Result};
 use futures::future::join_all;
 
-use super::{as_items, auth::{sign, AwsCreds}, xml_to_value};
+use super::{
+    as_items,
+    auth::{sign, AwsCreds},
+    xml_to_value,
+};
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -9,10 +13,10 @@ use super::{as_items, auth::{sign, AwsCreds}, xml_to_value};
 pub struct LoadBalancer {
     pub arn: String,
     pub name: String,
-    pub lb_type: String,        // "application" | "network" | "gateway"
-    pub state: String,          // "active" | "provisioning"
+    pub lb_type: String, // "application" | "network" | "gateway"
+    pub state: String,   // "active" | "provisioning"
     pub region: String,
-    pub has_targets: bool,      // false initially, updated by checking target groups
+    pub has_targets: bool, // false initially, updated by checking target groups
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -28,16 +32,17 @@ pub async fn list_load_balancers(
         .map(|r| list_lbs_in_region(client, creds, r))
         .collect();
     let results = join_all(tasks).await;
-    Ok(results.into_iter().filter_map(|r| r.ok()).flatten().collect())
+    Ok(results
+        .into_iter()
+        .filter_map(|r| r.ok())
+        .flatten()
+        .collect())
 }
 
 // ── Region list (reuse EC2 region list) ──────────────────────────────────────
 
 async fn list_elb_regions(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<String>> {
-    let body = form_params(&[
-        ("Action", "DescribeRegions"),
-        ("Version", "2016-11-15"),
-    ]);
+    let body = form_params(&[("Action", "DescribeRegions"), ("Version", "2016-11-15")]);
     let url = "https://ec2.us-east-1.amazonaws.com/";
     let signed = sign(
         creds,
@@ -91,15 +96,16 @@ async fn list_lbs_in_region(
         let xml = elb_query(client, creds, region, &body).await?;
         let v = xml_to_value(&xml)?;
 
-        let members = as_items(
-            &v["DescribeLoadBalancersResult"]["LoadBalancers"]["member"],
-        );
+        let members = as_items(&v["DescribeLoadBalancersResult"]["LoadBalancers"]["member"]);
 
         for lb in members {
             let arn = lb["LoadBalancerArn"].as_str().unwrap_or("").to_string();
             let name = lb["LoadBalancerName"].as_str().unwrap_or("").to_string();
             let lb_type = lb["Type"].as_str().unwrap_or("unknown").to_string();
-            let state = lb["State"]["Code"].as_str().unwrap_or("unknown").to_string();
+            let state = lb["State"]["Code"]
+                .as_str()
+                .unwrap_or("unknown")
+                .to_string();
 
             let has_targets = check_has_targets(client, creds, region, &arn).await;
 
@@ -161,9 +167,7 @@ async fn describe_target_group_arns(
     let xml = elb_query(client, creds, region, &body).await?;
     let v = xml_to_value(&xml)?;
 
-    let members = as_items(
-        &v["DescribeTargetGroupsResult"]["TargetGroups"]["member"],
-    );
+    let members = as_items(&v["DescribeTargetGroupsResult"]["TargetGroups"]["member"]);
 
     Ok(members
         .iter()
@@ -186,9 +190,7 @@ async fn has_registered_targets(
     let xml = elb_query(client, creds, region, &body).await?;
     let v = xml_to_value(&xml)?;
 
-    let members = as_items(
-        &v["DescribeTargetHealthResult"]["TargetHealthDescriptions"]["member"],
-    );
+    let members = as_items(&v["DescribeTargetHealthResult"]["TargetHealthDescriptions"]["member"]);
 
     Ok(!members.is_empty())
 }
@@ -202,7 +204,10 @@ async fn elb_query(
     body: &str,
 ) -> Result<String> {
     let url = format!("https://elasticloadbalancing.{region}.amazonaws.com/");
-    let creds_for_region = AwsCreds { region: region.to_string(), ..creds.clone() };
+    let creds_for_region = AwsCreds {
+        region: region.to_string(),
+        ..creds.clone()
+    };
     let body_bytes = body.as_bytes();
 
     let signed = sign(

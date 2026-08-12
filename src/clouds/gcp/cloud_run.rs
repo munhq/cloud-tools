@@ -10,15 +10,12 @@ pub struct CloudRunService {
     pub name: String,
     pub full_name: String,
     pub region: String,
-    pub uri: Option<String>,     // serving URL
+    pub uri: Option<String>, // serving URL
     pub update_time: Option<String>,
     pub latest_ready_revision: Option<String>,
 }
 
-pub async fn list_services(
-    http: &Client,
-    creds: &GcpCreds,
-) -> Result<Vec<CloudRunService>> {
+pub async fn list_services(http: &Client, creds: &GcpCreds) -> Result<Vec<CloudRunService>> {
     let token = access_token(http, creds).await?;
     let mut out = Vec::new();
     let mut page_token: Option<String> = None;

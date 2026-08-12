@@ -11,11 +11,11 @@ use super::auth::{access_token, GcpCreds};
 pub struct Commitment {
     pub name: String,
     pub region: String,
-    pub status: String,        // "ACTIVE", "EXPIRED", "NOT_YET_ACTIVE"
-    pub plan: String,          // "TWELVE_MONTH", "THIRTY_SIX_MONTH"
+    pub status: String, // "ACTIVE", "EXPIRED", "NOT_YET_ACTIVE"
+    pub plan: String,   // "TWELVE_MONTH", "THIRTY_SIX_MONTH"
     pub start_timestamp: Option<String>,
     pub end_timestamp: Option<String>,
-    pub category: String,      // "MACHINE_IMAGES_E2", "GENERAL_PURPOSE_N2", etc.
+    pub category: String, // "MACHINE_IMAGES_E2", "GENERAL_PURPOSE_N2", etc.
     /// Resources committed (vCPUs, memory GB).
     pub resources: Vec<CommittedResource>,
 }
@@ -26,10 +26,7 @@ pub struct CommittedResource {
     pub amount: f64,
 }
 
-pub async fn list_commitments(
-    http: &Client,
-    creds: &GcpCreds,
-) -> Result<Vec<Commitment>> {
+pub async fn list_commitments(http: &Client, creds: &GcpCreds) -> Result<Vec<Commitment>> {
     let token = access_token(http, creds).await?;
     let url = format!(
         "https://compute.googleapis.com/compute/v1/projects/{}/aggregatedList/commitments",
@@ -44,7 +41,11 @@ pub async fn list_commitments(
     let mut out = Vec::new();
 
     for (_key, region_data) in data["items"].as_object().cloned().unwrap_or_default() {
-        for c in region_data["commitments"].as_array().cloned().unwrap_or_default() {
+        for c in region_data["commitments"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+        {
             let name = c["name"].as_str().unwrap_or("").to_string();
             let region = c["region"]
                 .as_str()
@@ -77,8 +78,14 @@ pub async fn list_commitments(
                 .collect();
 
             out.push(Commitment {
-                name, region, status, plan, start_timestamp: start,
-                end_timestamp: end, category, resources,
+                name,
+                region,
+                status,
+                plan,
+                start_timestamp: start,
+                end_timestamp: end,
+                category,
+                resources,
             });
         }
     }

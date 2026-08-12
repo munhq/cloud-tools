@@ -16,10 +16,7 @@ pub struct GcpProject {
 }
 
 /// List all active projects accessible by the service account.
-pub async fn list_projects(
-    http: &Client,
-    creds: &GcpCreds,
-) -> Result<Vec<GcpProject>> {
+pub async fn list_projects(http: &Client, creds: &GcpCreds) -> Result<Vec<GcpProject>> {
     let token = access_token(http, creds).await?;
     let mut out = Vec::new();
     let mut page_token: Option<String> = None;

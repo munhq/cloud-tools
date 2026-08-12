@@ -17,11 +17,9 @@ pub async fn get_costs(http: &Client, creds: &OvhCreds) -> Result<Vec<CostEntry>
         let amount = bill["priceWithTax"]["value"].as_f64().unwrap_or(0.0);
         let date_str = bill["date"].as_str().unwrap_or("");
         // Bill date is ISO-8601; parse to NaiveDate
-        let date = chrono::NaiveDate::parse_from_str(
-            date_str.get(..10).unwrap_or(date_str),
-            "%Y-%m-%d",
-        )
-        .unwrap_or(now);
+        let date =
+            chrono::NaiveDate::parse_from_str(date_str.get(..10).unwrap_or(date_str), "%Y-%m-%d")
+                .unwrap_or(now);
         entries.push(CostEntry {
             service: "cloud".into(),
             amount_usd: amount,

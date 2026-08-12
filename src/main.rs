@@ -1,3 +1,10 @@
+// Several cloud API wrappers legitimately take more than seven parameters:
+// credentials, region, filters and pagination cursors all travel together.
+#![allow(clippy::too_many_arguments)]
+// Matching on Ok(..) with an explicit commented catch-all documents *why* the
+// error path is ignored. `if let` would drop that comment.
+#![allow(clippy::single_match)]
+
 use anyhow::Result;
 use tracing_subscriber::EnvFilter;
 

@@ -1,7 +1,11 @@
 use anyhow::{anyhow, Result};
 use futures::future::join_all;
 
-use super::{as_items, auth::{sign, AwsCreds}, xml_to_value};
+use super::{
+    as_items,
+    auth::{sign, AwsCreds},
+    xml_to_value,
+};
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -26,16 +30,17 @@ pub async fn list_log_groups_without_retention(
         .map(|r| list_log_groups_in_region(client, creds, r))
         .collect();
     let results = join_all(tasks).await;
-    Ok(results.into_iter().filter_map(|r| r.ok()).flatten().collect())
+    Ok(results
+        .into_iter()
+        .filter_map(|r| r.ok())
+        .flatten()
+        .collect())
 }
 
 // ── Region discovery (reuse EC2 DescribeRegions) ─────────────────────────────
 
 async fn list_regions(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<String>> {
-    let body = form_params(&[
-        ("Action", "DescribeRegions"),
-        ("Version", "2016-11-15"),
-    ]);
+    let body = form_params(&[("Action", "DescribeRegions"), ("Version", "2016-11-15")]);
     let url = "https://ec2.us-east-1.amazonaws.com/";
     let signed = sign(
         creds,
@@ -85,7 +90,10 @@ async fn list_log_groups_in_region(
         };
 
         let url = format!("https://logs.{region}.amazonaws.com/");
-        let creds_for_region = AwsCreds { region: region.to_string(), ..creds.clone() };
+        let creds_for_region = AwsCreds {
+            region: region.to_string(),
+            ..creds.clone()
+        };
 
         let signed = sign(
             &creds_for_region,
@@ -115,7 +123,9 @@ async fn list_log_groups_in_region(
         let status = resp.status();
         let text = resp.text().await?;
         if !status.is_success() {
-            return Err(anyhow!("CloudWatch Logs API error {status} in {region}: {text}"));
+            return Err(anyhow!(
+                "CloudWatch Logs API error {status} in {region}: {text}"
+            ));
         }
 
         let v: serde_json::Value = serde_json::from_str(&text)

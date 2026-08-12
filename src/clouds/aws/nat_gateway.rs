@@ -2,7 +2,11 @@ use anyhow::{anyhow, Result};
 use chrono::{Duration, Utc};
 use futures::future::join_all;
 
-use super::{as_items, auth::{sign, AwsCreds}, xml_to_value};
+use super::{
+    as_items,
+    auth::{sign, AwsCreds},
+    xml_to_value,
+};
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -10,7 +14,7 @@ use super::{as_items, auth::{sign, AwsCreds}, xml_to_value};
 pub struct NatGateway {
     pub id: String,
     pub vpc_id: String,
-    pub state: String,        // "available" | "deleting" | "deleted" | "failed" | "pending"
+    pub state: String, // "available" | "deleting" | "deleted" | "failed" | "pending"
     pub region: String,
     pub name: Option<String>,
     /// Total bytes sent from internal instances → internet via this NAT GW over last 14 days.
@@ -33,16 +37,17 @@ pub async fn list_nat_gateways(
         .map(|r| list_in_region(client, creds, r))
         .collect();
     let results = join_all(tasks).await;
-    Ok(results.into_iter().filter_map(|r| r.ok()).flatten().collect())
+    Ok(results
+        .into_iter()
+        .filter_map(|r| r.ok())
+        .flatten()
+        .collect())
 }
 
 // ── Region discovery ──────────────────────────────────────────────────────────
 
 async fn list_regions(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<String>> {
-    let body = form_params(&[
-        ("Action", "DescribeRegions"),
-        ("Version", "2016-11-15"),
-    ]);
+    let body = form_params(&[("Action", "DescribeRegions"), ("Version", "2016-11-15")]);
     let xml = ec2_query(client, creds, "us-east-1", &body).await?;
     let v = xml_to_value(&xml)?;
     Ok(as_items(&v["regionInfo"]["item"])
@@ -118,11 +123,16 @@ async fn bytes_out(
     nat_id: &str,
 ) -> Result<Option<u64>> {
     let vals = cw_metric(
-        client, creds, region,
-        "AWS/NATGateway", "BytesOutToDestination",
+        client,
+        creds,
+        region,
+        "AWS/NATGateway",
+        "BytesOutToDestination",
         &[("NatGatewayId", nat_id)],
-        14, "Sum",
-    ).await?;
+        14,
+        "Sum",
+    )
+    .await?;
     if vals.is_empty() {
         return Ok(None);
     }
@@ -137,11 +147,16 @@ async fn active_connections_max(
     nat_id: &str,
 ) -> Result<Option<u64>> {
     let vals = cw_metric(
-        client, creds, region,
-        "AWS/NATGateway", "ActiveConnectionCount",
+        client,
+        creds,
+        region,
+        "AWS/NATGateway",
+        "ActiveConnectionCount",
         &[("NatGatewayId", nat_id)],
-        14, "Maximum",
-    ).await?;
+        14,
+        "Maximum",
+    )
+    .await?;
     if vals.is_empty() {
         return Ok(None);
     }
@@ -188,7 +203,10 @@ async fn cw_metric(
 
     let body = form_params(&params);
     let url = format!("https://monitoring.{region}.amazonaws.com/");
-    let creds_for_region = AwsCreds { region: region.to_string(), ..creds.clone() };
+    let creds_for_region = AwsCreds {
+        region: region.to_string(),
+        ..creds.clone()
+    };
 
     let signed = sign(
         &creds_for_region,
@@ -236,7 +254,10 @@ async fn ec2_query(
     body: &str,
 ) -> Result<String> {
     let url = format!("https://ec2.{region}.amazonaws.com/");
-    let creds_for_region = AwsCreds { region: region.to_string(), ..creds.clone() };
+    let creds_for_region = AwsCreds {
+        region: region.to_string(),
+        ..creds.clone()
+    };
 
     let signed = sign(
         &creds_for_region,
