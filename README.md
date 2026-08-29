@@ -160,7 +160,11 @@ cloud-tools = { git = "https://github.com/munhq/cloud-tools", default-features =
 
 ## Status
 
-Working and used against live AWS, GCP, Cloudflare and OVH accounts. The AWS and GCP analyzers are the most complete; Cloudflare and OVH cover cost and inventory but have fewer waste rules. Contributions adding provider coverage are welcome.
+Working and used against live AWS, GCP, Cloudflare and OVH accounts. Waste
+analysis exists for AWS and GCP only — Cloudflare and OVH have none at all, not
+merely fewer rules, and `get_waste` says so rather than returning an empty list.
+AWS has no inventory tool yet, though the listing calls behind one already exist.
+Contributions adding provider coverage are welcome.
 
 ## Licence
 

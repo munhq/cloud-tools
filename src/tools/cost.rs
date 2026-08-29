@@ -254,7 +254,7 @@ impl CloudTools {
     }
 
     #[tool(
-        description = "Commitments you are paying for, and whether you are consuming them. AWS: Savings Plans utilisation, coverage of eligible spend, and the saving a further commitment would give. GCP: committed use discounts with their expiry. Not implemented for Cloudflare or OVH, which sell no commitments."
+        description = "Commitments you are paying for, and whether you are consuming them, over the last 30 days. AWS: Savings Plans utilisation, coverage of eligible spend, and the saving a further commitment would give. GCP: committed use discounts with their expiry. Not implemented for Cloudflare or OVH, which sell no commitments."
     )]
     async fn get_commitments(&self, Parameters(input): Parameters<CloudInput>) -> String {
         answer(self.commitments(input).await)
@@ -332,7 +332,15 @@ impl CloudTools {
             Cloud::Aws => {
                 let aws = cr.aws()?;
                 match input.group_by.as_deref() {
-                    Some("data_transfer") => self.do_data_transfer(aws).await,
+                    Some("data_transfer") => {
+                        let s = NaiveDate::parse_from_str(&start, "%Y-%m-%d").map_err(|_| {
+                            anyhow::anyhow!("Invalid start_date, expected YYYY-MM-DD")
+                        })?;
+                        let e = NaiveDate::parse_from_str(&end, "%Y-%m-%d").map_err(|_| {
+                            anyhow::anyhow!("Invalid end_date, expected YYYY-MM-DD")
+                        })?;
+                        self.do_data_transfer(aws, s, e).await
+                    }
                     Some("service") | None => self.fetch_aws_costs(aws, &start, &end).await,
                     Some(other) => Err(anyhow::anyhow!(
                         "group_by \"{other}\" is not known; use \"service\" or \"data_transfer\""
@@ -351,39 +359,61 @@ impl CloudTools {
     /// the BigQuery export; without it the Budgets API answers with budget
     /// amounts, which are not spend — so that case says so in the payload rather
     /// than letting a budget be read as a bill.
+    /// GCP spend, across every project given.
+    ///
+    /// `project_ids` is a list and every other GCP arm walks all of it. This one
+    /// read `.first()` and dropped the rest, so a caller asking about four
+    /// projects was answered about one — silently, with a plausible number.
     async fn gcp_costs(&self, c: &GcpCredentials, start: &str, end: &str) -> Result<String> {
-        let project = c
-            .project_ids
-            .first()
-            .context("credentials.gcp.project_ids is empty")?;
-        let creds = self.gcp_for(c, project)?;
+        if c.project_ids.is_empty() {
+            anyhow::bail!("credentials.gcp.project_ids is empty");
+        }
         let start_d = NaiveDate::parse_from_str(start, "%Y-%m-%d")
             .map_err(|_| anyhow::anyhow!("Invalid start_date, expected YYYY-MM-DD"))?;
         let end_d = NaiveDate::parse_from_str(end, "%Y-%m-%d")
             .map_err(|_| anyhow::anyhow!("Invalid end_date, expected YYYY-MM-DD"))?;
 
-        let (costs, source) = if c.billing_table.is_some() {
-            (
-                gcp_billing::get_costs_range(&self.http, &creds, start_d, end_d).await?,
-                "bigquery_billing_export",
-            )
-        } else {
-            (gcp_billing::get_costs(&self.http, &creds).await?, "budgets")
-        };
-        let total: f64 = costs.iter().map(|c| c.amount_usd).sum();
+        let mut per_project = Vec::new();
+        let mut grand_total = 0.0;
+        for project in &c.project_ids {
+            let creds = self.gcp_for(c, project)?;
+            let costs = if c.billing_table.is_some() {
+                gcp_billing::get_costs_range(&self.http, &creds, start_d, end_d).await
+            } else {
+                gcp_billing::get_costs(&self.http, &creds).await
+            };
+            match costs {
+                Ok(costs) => {
+                    let total: f64 = costs.iter().map(|c| c.amount_usd).sum();
+                    grand_total += total;
+                    per_project.push(serde_json::json!({
+                        "project_id": project,
+                        "total_usd": round2(total),
+                        "by_service": costs.iter().map(|c| serde_json::json!({
+                            "service": c.service,
+                            "amount_usd": round2(c.amount_usd),
+                        })).collect::<Vec<_>>(),
+                    }));
+                }
+                // One project failing must not lose the others: a missing
+                // permission on a single project is the common case.
+                Err(e) => per_project.push(serde_json::json!({
+                    "project_id": project,
+                    "error": e.to_string(),
+                })),
+            }
+        }
+
         Ok(serde_json::to_string_pretty(&serde_json::json!({
             "period": { "start": start, "end": end },
-            "source": source,
+            "source": if c.billing_table.is_some() { "bigquery_billing_export" } else { "budgets" },
             "note": if c.billing_table.is_some() { serde_json::Value::Null } else {
                 serde_json::json!("No billing_table was given, so these are BUDGET amounts from the \
                                    Budgets API, not actual spend. Set credentials.gcp.billing_table \
                                    to the BigQuery billing export table for real costs.")
             },
-            "total_usd": round2(total),
-            "by_service": costs.iter().map(|c| serde_json::json!({
-                "service": c.service,
-                "amount_usd": round2(c.amount_usd),
-            })).collect::<Vec<_>>(),
+            "total_usd": round2(grand_total),
+            "projects": per_project,
         }))?)
     }
 
@@ -489,10 +519,19 @@ impl CloudTools {
         Ok(serde_json::to_string_pretty(&report)?)
     }
 
-    async fn do_data_transfer(&self, input: &AwsCredentials) -> Result<String> {
+    /// AWS transfer cost by usage type, over the window the caller asked for.
+    ///
+    /// This hardcoded the last 30 days while get_costs advertises start_date and
+    /// end_date, so those two arguments were accepted and silently discarded for
+    /// group_by="data_transfer".
+    async fn do_data_transfer(
+        &self,
+        input: &AwsCredentials,
+        start: NaiveDate,
+        end: NaiveDate,
+    ) -> Result<String> {
         let creds = self.aws_creds(input).await?;
-        let now = Utc::now().date_naive();
-        let start = now - chrono::Duration::days(30);
+        let (start, now) = (start, end);
         let entries = ce::get_data_transfer_breakdown(&self.http, &creds, start, now).await?;
         let total: f64 = entries.iter().map(|e| e.amount_usd).sum();
         let output = serde_json::json!({
@@ -1340,12 +1379,22 @@ impl CloudTools {
             }));
         }
 
-        // ── Grand total ──
-        let grand_total: f64 = providers
+        // ── Totals ──
+        //
+        // Spend and waste are counted separately, and that is the point. One
+        // "grand_total_estimated_monthly_usd" used to add whichever figure each
+        // provider happened to report — AWS and GCP contribute WASTE, Cloudflare
+        // and OVH contribute BILLED SPEND — so the headline number was money
+        // wasted plus money spent, which is not a quantity. Adding AWS to this
+        // report made it wronger, since AWS reports waste.
+        let waste_total: f64 = providers
+            .iter()
+            .filter_map(|p| p.get("waste_total_monthly_usd").and_then(|v| v.as_f64()))
+            .sum();
+        let spend_total: f64 = providers
             .iter()
             .filter_map(|p| {
-                p.get("waste_total_monthly_usd")
-                    .or(p.get("total_billed_usd"))
+                p.get("total_billed_usd")
                     .or(p.get("total_usd"))
                     .and_then(|v| v.as_f64())
             })
@@ -1353,7 +1402,19 @@ impl CloudTools {
 
         let output = serde_json::json!({
             "summary": {
-                "grand_total_estimated_monthly_usd": round2(grand_total),
+                "estimated_monthly_waste_usd": round2(waste_total),
+                "waste_reported_by": providers.iter()
+                    .filter(|p| p.get("waste_total_monthly_usd").is_some())
+                    .filter_map(|p| p["provider"].as_str().map(String::from))
+                    .collect::<Vec<_>>(),
+                "billed_monthly_usd": round2(spend_total),
+                "spend_reported_by": providers.iter()
+                    .filter(|p| p.get("total_billed_usd").is_some() || p.get("total_usd").is_some())
+                    .filter_map(|p| p["provider"].as_str().map(String::from))
+                    .collect::<Vec<_>>(),
+                "note": "Waste and spend are separate figures. Adding them together would \
+                         double-count: waste is a subset of what some providers bill, and no \
+                         provider here reports both.",
                 "providers_included": providers.iter()
                     .filter_map(|p| p["provider"].as_str().map(String::from))
                     .collect::<Vec<_>>(),
@@ -1418,5 +1479,105 @@ fn gke_node_monthly_estimate(machine_type: &str) -> f64 {
         "c2-standard-4" => 124.62,
         "c3-standard-4" => 130.90,
         _ => 50.0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn creds(json: &str) -> Credentials {
+        serde_json::from_str(json).expect("credentials should parse")
+    }
+
+    /// The cloud selector is an enum, so a typo is rejected by the schema rather
+    /// than reaching a match arm and falling through to a default cloud.
+    #[test]
+    fn cloud_parses_only_the_four_names() {
+        for (input, expect) in [
+            ("\"aws\"", "aws"),
+            ("\"gcp\"", "gcp"),
+            ("\"cloudflare\"", "cloudflare"),
+            ("\"ovh\"", "ovh"),
+        ] {
+            let c: Cloud = serde_json::from_str(input).expect("known cloud");
+            assert_eq!(c.name(), expect);
+        }
+        assert!(serde_json::from_str::<Cloud>("\"azure\"").is_err());
+        assert!(serde_json::from_str::<Cloud>("\"AWS\"").is_err());
+    }
+
+    /// A capability a cloud does not have must name the ones that do. An empty
+    /// result would read as "nothing found", which for waste means a clean bill.
+    #[test]
+    fn unsupported_names_the_clouds_that_do_support_it() {
+        let msg = unsupported("waste analysis", &Cloud::Ovh, &["aws", "gcp"]).to_string();
+        assert_eq!(
+            msg,
+            "waste analysis is not implemented for ovh; supported: aws, gcp"
+        );
+    }
+
+    /// Every accessor says which field is missing and what belongs in it.
+    #[test]
+    fn missing_credentials_say_which_block_and_what_it_needs() {
+        let empty = creds("{}");
+        for (result, expect) in [
+            (empty.gcp().err(), "project_ids"),
+            (empty.cloudflare().err(), "api_token"),
+            (empty.ovh().err(), "app_key"),
+        ] {
+            let msg = result
+                .expect("absent credentials must be an error")
+                .to_string();
+            assert!(msg.contains(expect), "{msg:?} should mention {expect}");
+        }
+    }
+
+    /// role_arn is optional: an empty AWS block is valid and means "use the
+    /// credentials this machine already has". Requiring it blocked every user
+    /// running the server against their own account.
+    #[test]
+    fn aws_block_may_be_empty_and_role_arn_is_optional() {
+        let c = creds(r#"{"aws":{}}"#);
+        let aws = c.aws().expect("an empty aws block is credentials enough");
+        assert!(aws.role_arn.is_none());
+        assert!(aws.external_id.is_none());
+
+        let assumed = creds(r#"{"aws":{"role_arn":"arn:aws:iam::000000000000:role/Example"}}"#);
+        assert_eq!(
+            assumed.aws().unwrap().role_arn.as_deref(),
+            Some("arn:aws:iam::000000000000:role/Example")
+        );
+    }
+
+    /// Errors are serialised, not interpolated. The old code built the JSON with
+    /// format!, so any message containing a quote produced a broken payload —
+    /// and AWS answers with XML.
+    #[test]
+    fn error_payloads_survive_quotes_in_the_message() {
+        let xml = r#"<Error><Code>Invalid</Code><Message xmlns="x">no "token"</Message></Error>"#;
+        let rendered = answer(Err(anyhow::anyhow!("STS failed: {xml}")));
+        let parsed: serde_json::Value =
+            serde_json::from_str(&rendered).expect("the payload must be valid JSON");
+        assert!(parsed["error"].as_str().unwrap().contains(r#"no "token""#));
+    }
+
+    /// A successful result is passed through untouched, not re-wrapped.
+    #[test]
+    fn success_is_returned_verbatim() {
+        assert_eq!(
+            answer(Ok("{\"total_usd\":1.5}".into())),
+            "{\"total_usd\":1.5}"
+        );
+    }
+
+    /// GCP takes a list of projects, and cost reporting must not quietly answer
+    /// about one of them.
+    #[test]
+    fn gcp_credentials_keep_every_project() {
+        let c = creds(r#"{"gcp":{"project_ids":["a","b","c"]}}"#);
+        assert_eq!(c.gcp().unwrap().project_ids, vec!["a", "b", "c"]);
+        assert!(c.gcp().unwrap().billing_table.is_none());
     }
 }
