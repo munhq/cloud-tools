@@ -1,0 +1,91 @@
+# Publish server.json to the official MCP registry with GitHub Actions OIDC.
+#
+# Why OIDC and not a person: the registry proves ownership of the
+# io.github.munhq/* namespace through GitHub. A user's OAuth token cannot carry
+# that proof — munhq restricts third-party OAuth apps, so the registry's app
+# never sees the org membership and every interactive `mcp-publisher login
+# github` ends in a 403 that names only the user's own namespace. A workflow in
+# this repository IS the org speaking for itself: the OIDC token GitHub mints for
+# this run proves repo and owner, with no app policy involved.
+#
+# Runs on version tags, and on manual dispatch for the first publish and for
+# fixes to server.json alone.
+name: mcp-registry
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # load-bearing: this is the OIDC proof
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install mcp-publisher
+        run: |
+          curl -fsSL https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz \
+            | tar -xz mcp-publisher
+
+      # server.json declares a version and a package version, and the registry
+      # rejects the publish if the declared package version does not exist on
+      # npm. Four files carry the number, so it is checked rather than trusted.
+      #
+      # server.json is the source, NOT the git ref. On a workflow_dispatch
+      # GITHUB_REF_NAME is the branch — "main" — so comparing against it would
+      # fail every dispatch, which is exactly when this is needed. A tag push
+      # additionally has to agree with server.json.
+      - name: Resolve the version, and make the manifests agree
+        id: v
+        run: |
+          SRV=$(node -p "require('./server.json').version")
+          python3 check-versions.py "$SRV"
+          # The registry verifies ownership by reading mcpName out of the
+          # PUBLISHED tarball, so a mismatch here means a 400 after npm has
+          # already served an immutable version. The field can only be fixed in
+          # a new version, never in the one already published.
+          MCPNAME=$(node -p "require('./npm/package.json').mcpName || ''")
+          NAME=$(node -p "require('./server.json').name")
+          if [ "$MCPNAME" != "$NAME" ]; then
+            echo "::error::npm/package.json mcpName is '$MCPNAME', server.json name is '$NAME'"
+            exit 1
+          fi
+          if [ "${{ github.ref_type }}" = "tag" ] && [ "${GITHUB_REF_NAME#v}" != "$SRV" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match server.json $SRV"
+            exit 1
+          fi
+          echo "version=$SRV" >> "$GITHUB_OUTPUT"
+
+      # The registry VALIDATES that the declared npm version already exists, and
+      # answers 400 "version was not found (status: 404)" if npm is still
+      # publishing. release-npm.yml fires on the same tag with no ordering
+      # between the two workflows, so wait for npm to serve it.
+      - name: Wait for the npm version to be visible
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          echo "waiting for @munhq/cloud-tools@$VERSION on npm"
+          for i in $(seq 1 60); do
+            if npm view "@munhq/cloud-tools@$VERSION" version >/dev/null 2>&1; then
+              echo "npm has $VERSION"
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "npm never served $VERSION after 20 minutes" >&2
+          exit 1
+
+      - name: Login (GitHub Actions OIDC)
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish
+        run: ./mcp-publisher publish

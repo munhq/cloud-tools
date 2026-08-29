@@ -1,0 +1,41 @@
+{
+  "name": "@munhq/cloud-tools",
+  "version": "0.2.0",
+  "mcpName": "io.github.munhq/cloud-tools",
+  "description": "Multi-cloud cost, inventory and waste analysis over MCP — what you spend by service, region and account, and what is idle, oversized, previous-generation, unattached or a commitment you are not consuming. AWS, GCP, Cloudflare and OVH, each behind that cloud's own credential mechanism. Thirteen tools, and every finding carries the utilisation evidence behind it.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "mcp-server",
+    "finops",
+    "cloud-cost",
+    "aws",
+    "gcp",
+    "cost-optimization",
+    "cloud-platforms"
+  ],
+  "homepage": "https://github.com/munhq/cloud-tools",
+  "bugs": "https://github.com/munhq/cloud-tools/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/munhq/cloud-tools.git"
+  },
+  "license": "Apache-2.0",
+  "bin": {
+    "cloud-tools-mcp": "bin/cloud-tools-mcp.js"
+  },
+  "scripts": {
+    "postinstall": "node bin/postinstall.js",
+    "test": "node bin/selftest.js"
+  },
+  "files": [
+    "bin/",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
