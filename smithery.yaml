@@ -1,0 +1,56 @@
+# Smithery — https://smithery.ai
+#
+# This file describes how to START the server and what it needs, not what it
+# does. The tool descriptions in the server itself carry the "what", and the
+# published listing reads them from a live `tools/list`.
+#
+# READ THIS BEFORE ASSUMING THIS FILE PUBLISHES ANYTHING. It does not. A
+# smithery.yaml sitting in a GitHub repository is not a submission — the listing
+# is created through the Smithery Platform API
+# (`PUT /servers/{namespace}%2F{name}/releases`) or at smithery.ai/new, which is
+# what .github/workflows/smithery.yml does on every tag. This file is what a
+# Smithery-style stdio launcher consumes, and the launch command below is correct
+# wherever it is read.
+#
+# No credential appears here, and that is deliberate. cloud-tools reads each
+# cloud through that cloud's own mechanism — the AWS credential chain, GCP
+# application-default credentials, a Cloudflare API token, OVH application keys —
+# from the environment of the machine the server runs on. A stdio launcher starts
+# it on the user's own machine, where those credentials already are, so asking a
+# directory to store copies of them would add a place they can leak and take
+# nothing away.
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    properties:
+      mode:
+        type: string
+        title: Server mode
+        description: >-
+          MCP over stdio, or the HTTP API. The binary reads CLOUD_TOOLS_MODE and
+          defaults to mcp, so an MCP client needs no configuration at all.
+        enum:
+          - mcp
+          - http
+        default: mcp
+    required: []
+  # A function rather than a static command, so an empty Mode means "use the
+  # default" instead of exporting an empty variable that overrides it.
+  commandFunction: |-
+    (config) => ({
+      command: 'npx',
+      // The binary is not JavaScript: this npm package is a small wrapper that
+      // fetches the release asset for the platform, verifies it against the
+      // published SHA256SUMS and executes it. `-y` so an install never waits for
+      // a prompt no one is watching.
+      args: ['-y', '@munhq/cloud-tools'],
+      env: config.mode ? { CLOUD_TOOLS_MODE: config.mode } : {},
+    })
+
+# There IS a Dockerfile in this repository, for Docker's MCP catalog. Smithery
+# still launches the npm wrapper: a container would need every cloud credential
+# passed into it explicitly, where the wrapper inherits the environment the user
+# has already configured.
+build:
+  dockerfile: null

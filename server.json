@@ -1,0 +1,40 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.munhq/cloud-tools",
+  "title": "cloud-tools",
+  "description": "Multi-cloud cost, inventory and waste analysis over MCP: AWS, GCP, Cloudflare and OVH.",
+  "repository": {
+    "url": "https://github.com/munhq/cloud-tools",
+    "source": "github"
+  },
+  "version": "0.2.0",
+  "icons": [
+    {
+      "src": "https://raw.githubusercontent.com/munhq/cloud-tools/main/docs/brand/icon-512.png",
+      "mimeType": "image/png",
+      "sizes": [
+        "512x512"
+      ]
+    }
+  ],
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@munhq/cloud-tools",
+      "version": "0.2.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "CLOUD_TOOLS_MODE",
+          "description": "mcp for an MCP client over stdio, http for the REST API. Defaults to mcp, which is what every MCP client wants.",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "string"
+        }
+      ],
+      "runtimeHint": "npx"
+    }
+  ]
+}

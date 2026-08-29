@@ -1,0 +1,232 @@
+# Publish the npm wrapper on a version tag.
+#
+# The package carries no binary — a few KB of JavaScript that resolves the
+# release asset for the platform, verifies it against the published SHA256SUMS
+# and executes it. It exists because every MCP directory installs servers the way
+# npm installs them: the official registry validates an npm version, Smithery
+# runs `npx`, mcp.so lists the same command. A compiled server with no npm name
+# is invisible to all three.
+#
+# ── Authentication, and why it is in two phases ───────────────────────────────
+#
+# The destination is Trusted Publishing (OIDC): npm accepts a publish proven by a
+# short-lived token GitHub mints for THIS repo and THIS workflow file, so no npm
+# token exists to leak or rotate. `id-token: write` below is what mints it.
+#
+# It cannot be phase one. A trusted publisher is configured on the package's
+# settings page at npmjs.com, and a package that has never been published has no
+# settings page. So:
+#
+#   Phase 1, once. Two ways:
+#     a) An NPM_TOKEN secret whose token has BYPASS 2FA enabled — npmjs.com ->
+#        Access Tokens -> Granular, All packages (the name cannot be selected
+#        before it exists), Read and write, Bypass 2FA on. Paste at
+#        github.com/munhq/cloud-tools/settings/secrets/actions as NPM_TOKEN.
+#     b) The `otp` input on this workflow. A token WITHOUT bypass returns
+#        `EOTP: This operation requires a one-time password`, which no CI run can
+#        answer — so the code is supplied at dispatch instead. A TOTP code lives
+#        30 seconds, so this path SKIPS the two slow steps below to reach the
+#        publish in about 20 seconds. It says which checks it skipped rather than
+#        passing quietly, and they are the ones a tag push always runs.
+#   Phase 2, once, then forever tokenless:
+#     npmjs.com -> Packages -> @munhq/cloud-tools -> Settings -> Trusted Publisher
+#     Publisher: GitHub Actions | Owner: munhq | Repo: cloud-tools
+#     Workflow: release-npm.yml | Allowed actions: npm publish
+#     Then DELETE the NPM_TOKEN secret. This workflow switches by itself: the
+#     publish step uses the token only while the secret exists.
+#
+# Node 22 and a current npm are MINIMUMS for OIDC. Pinning here means phase 2
+# fails with a version error rather than a confusing auth error.
+#
+# ── Why this waits ───────────────────────────────────────────────────────────
+#
+# The wrapper downloads from the tag it is versioned as, so publishing it before
+# release.yml has uploaded the assets ships a package that 404s for everyone who
+# installs in that window. This waits for the assets instead of racing them.
+name: release-npm
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Pack and validate, but do not publish'
+        type: boolean
+        default: true
+      otp:
+        description: '6-digit npm 2FA code (only for the FIRST publish, see header)'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+  id-token: write   # load-bearing in phase 2: this is the OIDC proof
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'   # required: it writes the
+                                                       # .npmrc both auth paths
+                                                       # read
+
+      # Only OIDC needs a newer npm than the runner ships, and this step costs
+      # ~30s — too much when a 30-second code is already ticking.
+      - name: npm must be new enough for OIDC
+        if: inputs.otp == ''
+        run: |
+          npm install -g npm@latest
+          npm --version
+
+      # Four files carry the version and different hands edit them, so they are
+      # checked rather than trusted. check-versions.py is the same check ci.yml
+      # runs on every push; here it additionally has to agree with the tag.
+      - name: Resolve the version, and make the manifests agree
+        id: v
+        run: |
+          PKG=$(node -p "require('./npm/package.json').version")
+          python3 check-versions.py "$PKG"
+          MCPNAME=$(node -p "require('./npm/package.json').mcpName || ''")
+          SRVNAME=$(node -p "require('./server.json').name")
+          if [ "$MCPNAME" != "$SRVNAME" ]; then
+            echo "::error::npm/package.json mcpName is '$MCPNAME', server.json name is '$SRVNAME'."
+            echo "::error::The official registry rejects the manifest unless the npm package names the server back."
+            exit 1
+          fi
+          if [ "${{ github.ref_type }}" = "tag" ] && [ "${GITHUB_REF_NAME#v}" != "$PKG" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match npm/package.json $PKG"
+            exit 1
+          fi
+          echo "version=$PKG" >> "$GITHUB_OUTPUT"
+          echo "publishing @munhq/cloud-tools@$PKG against release v$PKG"
+
+      - name: The resolver must still match the release matrix
+        run: bash npm/test_platform.sh
+
+      # release.yml builds six targets and a SHA256SUMS on this same tag. Poll
+      # for the checksum file: it is written last, after every asset is uploaded,
+      # so its presence means the whole set is there.
+      - name: Wait for the release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ steps.v.outputs.version }}
+        run: |
+          for i in $(seq 1 60); do
+            if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
+                 --json assets --jq '.assets[].name' 2>/dev/null | grep -qx SHA256SUMS; then
+              echo "assets are up"
+              exit 0
+            fi
+            echo "waiting for $TAG assets ($i/60)"
+            sleep 20
+          done
+          echo "::error::release assets never appeared after 20 minutes"
+          exit 1
+
+      # Prove the thing being published actually works: fetch the real asset for
+      # this runner from the real release and complete a real handshake. A
+      # wrapper that resolves the wrong asset name fails here rather than in a
+      # stranger's editor. Say the skip out loud on the OTP path: a skipped check
+      # that prints nothing reads as a passed one.
+      - name: Skipping the handshake check (OTP path)
+        if: inputs.otp != ''
+        run: |
+          echo "::warning::OTP path: skipped the download+handshake check to beat the 30s code expiry."
+          echo "::warning::Version agreement and the resolver/matrix check DID run. A tag push runs all of them."
+
+      # capture-card.mjs, not a printf pipe into the binary. The obvious version —
+      # send one initialize line and read stdout — measures the wrong thing here:
+      # this server treats stdin closing before it has replied as a fault and
+      # exits 1, so a perfectly good handshake fails the step. capture-card sends,
+      # waits for each id, and only then closes stdin.
+      - name: The wrapper must fetch and start the server
+        if: inputs.otp == ''
+        run: |
+          node npm/bin/postinstall.js
+          node npm/capture-card.mjs --out card.json -- node npm/bin/cloud-tools-mcp.js
+          node -e '
+            const card = require("./card.json");
+            const want = require("./npm/package.json").version;
+            const got = card.serverInfo || {};
+            if (got.name !== "cloud-tools" || got.version !== want) {
+              console.error(`::error::handshake says ${got.name} ${got.version}, expected cloud-tools ${want}`);
+              process.exit(1);
+            }
+            console.log(`handshake ok: ${got.name} ${got.version}, ${card.tools.length} tools`);
+          '
+          rm -f card.json
+
+      # E403 "You do not have permission to publish" says nothing about WHICH of
+      # the three possible causes it is: a name someone else owns, a token from
+      # the wrong account, or a token whose Packages-and-scopes selector does not
+      # cover a package that does not exist yet. These two lines separate them,
+      # and they print a username and package names — never the token.
+      - name: Who does the token belong to
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          echo "whoami: $(npm whoami 2>&1 | head -1)"
+          echo "writable packages (first 10):"
+          npm access list packages 2>&1 | head -10 || true
+
+      - name: Pack (dry run)
+        if: inputs.dry_run
+        working-directory: npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --dry-run --access public
+
+      # Publishing is not idempotent, and re-tagging is normal after a failed
+      # release: both tag pushes start a run, and if the first is still in its
+      # wait loop when the second release succeeds, BOTH reach this point. One
+      # publishes and the other dies on
+      # "403 You cannot publish over the previously published versions".
+      # A version already on npm means the job's work is done, not that it failed.
+      - name: Skip if npm already has this version
+        id: already
+        run: |
+          VERSION=$(node -p "require('./npm/package.json').version")
+          if npm view "@munhq/cloud-tools@$VERSION" version >/dev/null 2>&1; then
+            echo "::notice::@munhq/cloud-tools@$VERSION is already on npm — nothing to publish."
+            echo "done=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "done=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # --provenance attests that the tarball came from this commit and this
+      # workflow, which is most of the reason to publish from CI at all. It needs
+      # a PUBLIC repo: npm cannot verify an attestation whose source nobody can
+      # read. Decided from the repository's own visibility rather than a
+      # hand-maintained flag.
+      #
+      # The token path and the OIDC path differ by one thing: whether
+      # NODE_AUTH_TOKEN is set. Phase 2 begins the moment the secret is deleted,
+      # with no edit here.
+      - name: Publish
+        if: "!inputs.dry_run && steps.already.outputs.done != 'true'"
+        working-directory: npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          OTP: ${{ inputs.otp }}
+        run: |
+          OTP_ARG=""
+          if [ -n "${OTP:-}" ]; then
+            echo "publishing with a one-time code supplied at dispatch"
+            OTP_ARG="--otp=$OTP"
+          elif [ -n "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "publishing with the NPM_TOKEN secret (phase 1)"
+          else
+            echo "no NPM_TOKEN secret — publishing with trusted publishing (OIDC)"
+          fi
+          if [ "${{ github.event.repository.private }}" = "false" ]; then
+            npm publish --access public --provenance $OTP_ARG
+          else
+            echo "::warning::repo is private, publishing WITHOUT provenance"
+            npm publish --access public $OTP_ARG
+          fi

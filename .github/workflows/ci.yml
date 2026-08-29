@@ -20,4 +20,41 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test --all-features
-      - run: cargo build --release --all-features
+      - run: cargo build --release --locked --all-features
+
+  # The launch artefacts are edited by hand and read by four directories, so they
+  # are checked on every push rather than at the moment a tag is cut, when the
+  # only way to fix one is another tag.
+  manifests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Cargo.toml, npm/package.json and server.json (twice) carry the version.
+      - name: Every manifest must name one version
+        run: python3 check-versions.py
+
+      # The registry reads mcpName out of the published npm tarball to prove the
+      # package and the server share an owner. A mismatch is a 400 at publish
+      # time, against an npm version that is already immutable.
+      - name: The npm package must name the server back
+        run: |
+          MCPNAME=$(node -p "require('./npm/package.json').mcpName || ''")
+          NAME=$(node -p "require('./server.json').name")
+          test "$MCPNAME" = "$NAME" || {
+            echo "::error::npm/package.json mcpName is '$MCPNAME', server.json name is '$NAME'"
+            exit 1
+          }
+          echo "both name $NAME"
+
+      # The resolver, install.sh and the Dockerfile each decide which asset to
+      # download. release.yml decides which ones exist.
+      - name: The resolver, install.sh and the Dockerfile must match the release matrix
+        run: bash npm/test_platform.sh
+
+      - name: The npm package must pass its own test
+        working-directory: npm
+        run: npm test

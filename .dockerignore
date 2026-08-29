@@ -1,1 +1,6 @@
 target/
+.git/
+docs/
+npm/
+*.md
+!README.md
