@@ -98,6 +98,32 @@ pub async fn access_token(http: &Client, creds: &GcpCreds) -> Result<String> {
     }
 }
 
+/// Pull the access token out of an OAuth response, or report why there is none.
+///
+/// Both flows below used `.context("missing access_token")`, which is true and
+/// useless: the token endpoint answers 400 with `error` and `error_description`
+/// naming the actual cause, and those two fields are the difference between
+/// "something went wrong" and "run `gcloud auth application-default login`".
+/// An expired ADC reauth reads as `invalid_grant: reauth related error
+/// (invalid_rapt)`, which says exactly what to do.
+fn token_from(resp: &serde_json::Value, flow: &str) -> Result<String> {
+    if let Some(token) = resp["access_token"].as_str() {
+        return Ok(token.to_string());
+    }
+    let err = resp["error"].as_str().unwrap_or("unknown_error");
+    let detail = resp["error_description"]
+        .as_str()
+        .unwrap_or("no description");
+    let hint = match err {
+        "invalid_grant" => {
+            " — the credentials are expired or revoked. Run `gcloud auth application-default login`."
+        }
+        "invalid_client" => " — the client_id or client_secret in the credentials file is wrong.",
+        _ => "",
+    };
+    anyhow::bail!("GCP {flow} failed: {err}: {detail}{hint}")
+}
+
 /// Service account JWT assertion flow.
 async fn sa_jwt_token(http: &Client, json_str: &str) -> Result<String> {
     let sa: ServiceAccountKey =
@@ -129,10 +155,7 @@ async fn sa_jwt_token(http: &Client, json_str: &str) -> Result<String> {
         .json()
         .await?;
 
-    resp["access_token"]
-        .as_str()
-        .map(String::from)
-        .context("GCP: missing access_token in JWT response")
+    token_from(&resp, "service account sign-in")
 }
 
 /// ADC authorized_user refresh token flow.
@@ -153,8 +176,5 @@ async fn adc_refresh_token(http: &Client, json_str: &str) -> Result<String> {
         .json()
         .await?;
 
-    resp["access_token"]
-        .as_str()
-        .map(String::from)
-        .context("GCP: missing access_token in ADC refresh response")
+    token_from(&resp, "ADC token refresh")
 }
