@@ -1,6 +1,24 @@
 /target
-Cargo.lock
 .env
 *.pem
-*.json
-!src/**/*.json
+
+# Cloud credential files are all JSON, and a blanket `*.json` rule used to guard
+# them. That rule also ignored server.json, glama.json and npm/package.json —
+# the three files the MCP directories read — so a launch artefact could be
+# written, committed and still be absent from the repository. Name the
+# credentials instead.
+*credentials*.json
+*service-account*.json
+*-key.json
+*_key.json
+gha-creds-*.json
+application_default_credentials.json
+
+# Local tooling state, not part of the project.
+.codeindex.json
+.claude/settings.local.json
+
+# Release scratch: the bundle and the captured tool card are built by CI from
+# the released binary, never committed.
+*.mcpb
+card.json
