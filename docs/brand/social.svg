@@ -41,7 +41,7 @@
     <text x="80" y="446" font-size="30" font-weight="400" fill="#89a7ae">Idle · oversized · previous generation · unattached · unused commitments</text>
 
     <g font-family="ui-monospace,'SF Mono',Menlo,Consolas,monospace">
-      <text x="80" y="530" font-size="30" fill="#89a7ae"><tspan fill="#34d399">13 tools</tspan> <tspan fill="#4d6b73">across</tspan> AWS <tspan fill="#4d6b73">·</tspan> GCP <tspan fill="#4d6b73">·</tspan> Cloudflare <tspan fill="#4d6b73">·</tspan> OVH</text>
+      <text x="80" y="530" font-size="30" fill="#89a7ae"><tspan fill="#34d399">7 tools</tspan> <tspan fill="#4d6b73">across</tspan> AWS <tspan fill="#4d6b73">·</tspan> GCP <tspan fill="#4d6b73">·</tspan> Cloudflare <tspan fill="#4d6b73">·</tspan> OVH</text>
       <text x="80" y="578" font-size="26" fill="#4d6b73">npx -y @munhq/cloud-tools · AWS, GCP, Cloudflare, OVH · Apache-2.0</text>
     </g>
   </g>
