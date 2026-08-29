@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="cloud-tools">
+  <title>cloud-tools</title>
+  <defs>
+    <linearGradient id="ct" x1="64" y1="448" x2="448" y2="64" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0369a1"/><stop offset="1" stop-color="#34d399"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#ct)"/>
+  <!-- A cloud over a descending bar chart: what the server is for, in the two
+       shapes that survive being 32 pixels wide.
+       Drawn as geometry, never as <text>. A text element renders differently
+       wherever the font is missing, and this file is consumed by a README, a
+       favicon, an npm page, Smithery and Docker's catalogue — five renderers
+       with five font stacks.
+       The cloud is a union of three circles and a rounded base, all filled the
+       same white, so no seam can appear between them at any size. -->
+  <g fill="#fff">
+    <circle cx="256" cy="184" r="78"/>
+    <circle cx="180" cy="209" r="56"/>
+    <circle cx="330" cy="209" r="58"/>
+    <rect x="124" y="190" width="264" height="76" rx="38"/>
+    <!-- Three bars, each shorter than the last, sharing one baseline at 412.
+         Descending left to right, because the thing being reported is spend
+         coming down. Wide and few: at 32px, five thin bars are a smudge. -->
+    <rect x="148" y="308" width="56" height="104" rx="20"/>
+    <rect x="228" y="344" width="56" height="68" rx="20"/>
+    <rect x="308" y="380" width="56" height="32" rx="16"/>
+  </g>
+</svg>

@@ -1,4 +1,4 @@
-# cloud-tools
+<img src="docs/brand/logo.svg" alt="cloud-tools" height="72">
 
 Multi-cloud cost, inventory and waste analysis in Rust — exposed as an **MCP server** so an AI agent can query spend and waste directly, and as an **HTTP API** for everything else.
 
@@ -6,14 +6,24 @@ It reports spend and waste: idle instances, oversized nodes, previous-generation
 
 ## Tools
 
-Four tools, each spanning every configured cloud:
+Thirteen tools. Each one names the cloud it queries, because the credentials
+differ per cloud and an agent has to know which it is being asked for.
 
 | Tool | Answers |
 |---|---|
-| `cost` | What am I spending, broken down by service, region and account |
-| `waste` | What is idle, oversized, previous-generation or unattached |
-| `inventory` | What exists, across providers and accounts |
-| `metrics` | Utilisation data behind the cost and waste findings |
+| `get_aws_costs` | AWS spend grouped by service for a date range |
+| `compare_aws_costs` | Month over month, over identical day windows so a partial month does not read as a drop |
+| `get_aws_data_transfer` | Data transfer cost by usage type: internet egress, cross-AZ, inter-region |
+| `get_aws_savings_plans` | Savings Plans utilisation, coverage and what a further commitment would save |
+| `find_aws_waste` | Idle and oversized EC2, stopped instances, orphaned volumes, unattached addresses |
+| `get_gcp_inventory` | GCE instances, disks, addresses, snapshots and images across projects |
+| `get_gcp_recommendations` | The GCP Recommender API: idle VMs, rightsizing, idle disks and addresses |
+| `find_gcp_waste` | Idle and oversized GCE instances, stopped instances, unattached disks |
+| `get_cloudflare_costs` | Subscriptions with prices, and zone plan costs |
+| `get_cloudflare_inventory` | Zones, DNS records per zone, certificates, Workers |
+| `get_ovh_costs` | Recent invoices with amounts |
+| `get_ovh_inventory` | Cloud instances and active services, with renewal dates and monthly cost |
+| `get_cross_cloud_summary` | One combined cost and waste report over every cloud you pass credentials for |
 
 ## Coverage
 
@@ -37,16 +47,51 @@ The analyzers combine inventory with utilisation metrics rather than flagging on
 - **Unattached** — NAT gateways, load balancers and volumes with nothing behind them.
 - **Commitment gaps** — Savings Plans and Committed Use Discounts you are paying for and not consuming.
 
-Each finding carries the utilisation evidence behind it. The `metrics` tool exposes that evidence directly.
+Each finding carries the utilisation evidence behind it — the CPU and network
+series the verdict was drawn from, not the verdict alone.
 
 ## Install
 
-Prebuilt binaries for Linux and macOS, x86_64 and arm64, are attached to each
-[release](https://github.com/munhq/cloud-tools/releases):
+### As an MCP server
 
 ```bash
-curl -sSL https://github.com/munhq/cloud-tools/releases/latest/download/cloud-tools-<version>-x86_64-unknown-linux-gnu.tar.gz | tar xz
-./cloud-tools
+claude mcp add cloud-tools -- npx -y @munhq/cloud-tools
+```
+
+Anything that reads a JSON config — Claude Desktop, Cursor, Windsurf, Zed, Cline:
+
+```json
+{ "mcpServers": { "cloud-tools": { "command": "npx", "args": ["-y", "@munhq/cloud-tools"] } } }
+```
+
+The npm package is a small wrapper, because the server is a compiled binary and
+not JavaScript. On install it resolves the release asset for your platform,
+verifies it against the published `SHA256SUMS`, caches it under
+`~/.cache/cloud-tools/bin/` and executes it.
+
+### As a binary
+
+Prebuilt binaries for Linux, macOS and Windows, x86_64 and arm64, are attached to
+each [release](https://github.com/munhq/cloud-tools/releases). The script below
+downloads the one for your machine and checks it against `SHA256SUMS`:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/munhq/cloud-tools/main/install.sh | bash
+```
+
+Or take a single asset directly:
+
+```bash
+curl -fsSLO https://github.com/munhq/cloud-tools/releases/latest/download/cloud-tools-x86_64-linux
+chmod +x cloud-tools-x86_64-linux
+```
+
+### As a container
+
+```bash
+docker run -i --rm \
+  -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_REGION \
+  munhq/cloud-tools
 ```
 
 ## Running it
@@ -61,7 +106,7 @@ cargo build --release
 ./target/release/cloud-tools            # MCP server on stdio
 ```
 
-As an MCP server it plugs into any MCP-capable agent; the agent calls `cost`, `waste`, `inventory` and `metrics` directly and reasons over the results.
+As an MCP server it plugs into any MCP-capable agent. The agent calls the thirteen tools above directly and reasons over the results.
 
 To embed it instead, depend on the library and turn the binary features off:
 

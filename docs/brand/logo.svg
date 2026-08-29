@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 140" role="img" aria-label="cloud-tools">
+  <title>cloud-tools</title>
+  <defs>
+    <linearGradient id="ct" x1="18" y1="122" x2="122" y2="18" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0369a1"/><stop offset="1" stop-color="#34d399"/>
+    </linearGradient>
+  </defs>
+  <rect x="18" y="18" width="104" height="104" rx="28" fill="url(#ct)"/>
+  <!-- The mark is icon.svg's shapes verbatim, placed by a transform rather than
+       re-drawn at this scale. Re-drawing is how a wordmark and a favicon slowly
+       stop being the same logo. 104/512 = 0.203125. -->
+  <g transform="translate(18 18) scale(0.203125)">
+    <g fill="#fff">
+      <circle cx="256" cy="184" r="78"/>
+      <circle cx="180" cy="209" r="56"/>
+      <circle cx="330" cy="209" r="58"/>
+      <rect x="124" y="190" width="264" height="76" rx="38"/>
+      <rect x="148" y="308" width="56" height="104" rx="20"/>
+      <rect x="228" y="344" width="56" height="68" rx="20"/>
+      <rect x="308" y="380" width="56" height="32" rx="16"/>
+    </g>
+  </g>
+  <text x="150" y="88" font-family="'Hanken Grotesk',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif"
+        font-size="58" font-weight="700" letter-spacing="-2" fill="#12151C">cloud-tools</text>
+</svg>
