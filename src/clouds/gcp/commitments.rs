@@ -4,10 +4,11 @@
 
 use anyhow::Result;
 use reqwest::Client;
+use serde::Serialize;
 
 use super::auth::{access_token, GcpCreds};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Commitment {
     pub name: String,
     pub region: String,
@@ -20,7 +21,7 @@ pub struct Commitment {
     pub resources: Vec<CommittedResource>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CommittedResource {
     pub resource_type: String, // "VCPU", "MEMORY"
     pub amount: f64,

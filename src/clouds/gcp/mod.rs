@@ -10,7 +10,6 @@ pub mod cloud_vpn;
 pub mod commitments;
 pub mod compute;
 pub mod gke;
-pub mod gke_pods;
 pub mod monitoring;
 pub mod networking;
 pub mod recommender;

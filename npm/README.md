@@ -1,6 +1,6 @@
 # @munhq/cloud-tools
 
-Multi-cloud cost, inventory and waste analysis over MCP — what you spend by service, region and account, and what is idle, oversized, previous-generation, unattached or a commitment you are not consuming. AWS, GCP, Cloudflare and OVH, each behind that cloud's own credential mechanism. Thirteen tools, and every finding carries the utilisation evidence behind it.
+Multi-cloud cost, inventory and waste analysis over MCP — what you spend by service, region and account, and what is idle, oversized, previous-generation, unattached or a commitment you are not consuming. AWS, GCP, Cloudflare and OVH, each behind that cloud's own credential mechanism. Seven tools, each taking the cloud as an argument, and every finding carries the utilisation evidence behind it.
 
 ```
 npx -y @munhq/cloud-tools
