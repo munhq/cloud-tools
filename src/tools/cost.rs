@@ -2,7 +2,7 @@ use anyhow::Result;
 use chrono::{NaiveDate, Utc};
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{ServerCapabilities, ServerInfo},
+    model::{Implementation, ServerCapabilities, ServerInfo},
     schemars, tool, tool_handler, tool_router, ServerHandler,
 };
 use serde::Deserialize;
@@ -1190,6 +1190,16 @@ impl CloudTools {
 impl ServerHandler for CloudTools {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            // Without this, rmcp answers the handshake with its own crate name
+            // and version, so every client, the Smithery tool card and the
+            // .mcpb bundle all report the server as "rmcp 1.1.1". The name is
+            // written out rather than taken from `Implementation::from_build_env`,
+            // which reads CARGO_CRATE_NAME and would say "cloud_tools".
+            .with_server_info(
+                Implementation::new("cloud-tools", env!("CARGO_PKG_VERSION"))
+                    .with_title("cloud-tools")
+                    .with_website_url("https://github.com/munhq/cloud-tools"),
+            )
             .with_instructions(
                 "Multi-cloud cost, inventory, and waste analysis for AWS, GCP, OVH, and Cloudflare. \
                  AWS: pass an IAM Role ARN per call. \
