@@ -19,12 +19,21 @@ pub struct AwsCreds {
 /// Resolve ambient AWS credentials from the environment.
 ///
 /// Priority:
-/// 1. `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` env vars (Hetzner / local)
-/// 2. ECS container credentials endpoint
-/// 3. IMDSv2 (EC2 instance role)
+/// 1. `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` env vars
+/// 2. The shared credentials file, under `AWS_PROFILE` or `[default]`
+/// 3. ECS container credentials endpoint
+/// 4. IMDSv2 (EC2 instance role)
 ///
-/// These are YOUR credentials (the bot's identity), used only to call
-/// `sts:AssumeRole` for each customer. They are never exposed to customers.
+/// Step 2 used to be absent, and its absence was invisible: a developer with
+/// four working profiles in `~/.aws/credentials` got no credentials at all, then
+/// waited while step 4 tried to reach a link-local address that only answers on
+/// EC2, and finally read an error naming an IP. Every AWS tool here failed that
+/// way on every machine that is not an EC2 instance.
+///
+/// SSO is NOT read. `aws sso login` writes a cached OIDC token under
+/// `~/.aws/sso/cache`, and exchanging it is a different flow from anything here.
+/// A profile that is SSO-only therefore still needs `aws configure export-credentials`
+/// or an access key; the error below says so rather than leaving it to be guessed.
 pub async fn ambient_credentials(client: &reqwest::Client) -> Result<AwsCreds> {
     // 1. Env vars — works on Hetzner and local dev
     if let (Ok(key), Ok(secret)) = (
@@ -41,7 +50,12 @@ pub async fn ambient_credentials(client: &reqwest::Client) -> Result<AwsCreds> {
         });
     }
 
-    // 2. ECS task role
+    // 2. The shared credentials file — the ordinary developer setup.
+    if let Some(creds) = credentials_from_profile() {
+        return Ok(creds);
+    }
+
+    // 3. ECS task role
     if let Ok(rel) = std::env::var("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI") {
         let v: serde_json::Value = client
             .get(format!("http://169.254.170.2{rel}"))
@@ -63,19 +77,29 @@ pub async fn ambient_credentials(client: &reqwest::Client) -> Result<AwsCreds> {
         });
     }
 
-    // 3. IMDSv2 (EC2 instance role)
+    // 4. IMDSv2 (EC2 instance role).
+    //
+    // 169.254.169.254 is answered only on EC2. Everywhere else the connection
+    // hangs until the client's own timeout, which was none: the tool stalled for
+    // 30 seconds and then reported the URL. Two seconds is far longer than a real
+    // instance needs and short enough that a laptop gets the error below quickly.
+    let imds = std::time::Duration::from_secs(2);
     let token = client
         .put("http://169.254.169.254/latest/api/token")
         .header("X-aws-ec2-metadata-token-ttl-seconds", "21600")
+        .timeout(imds)
         .send()
-        .await?
+        .await
+        .map_err(|_| no_credentials())?
         .text()
         .await?;
     let role = client
         .get("http://169.254.169.254/latest/meta-data/iam/security-credentials/")
         .header("X-aws-ec2-metadata-token", &token)
+        .timeout(imds)
         .send()
-        .await?
+        .await
+        .map_err(|_| no_credentials())?
         .text()
         .await?;
     let v: serde_json::Value = client
@@ -84,8 +108,10 @@ pub async fn ambient_credentials(client: &reqwest::Client) -> Result<AwsCreds> {
             role.trim()
         ))
         .header("X-aws-ec2-metadata-token", &token)
+        .timeout(imds)
         .send()
-        .await?
+        .await
+        .map_err(|_| no_credentials())?
         .json()
         .await?;
     Ok(AwsCreds {
@@ -100,6 +126,91 @@ pub async fn ambient_credentials(client: &reqwest::Client) -> Result<AwsCreds> {
         session_token: v["Token"].as_str().map(String::from),
         region: "us-east-1".to_string(),
     })
+}
+
+/// The message a user actually needs when nothing in the chain produced credentials.
+///
+/// The old failure surfaced `error sending request for url
+/// (http://169.254.169.254/latest/api/token)`, which names a link-local address
+/// and no action. This names every accepted source instead.
+fn no_credentials() -> anyhow::Error {
+    anyhow::anyhow!(
+        "no AWS credentials found. cloud-tools reads, in order: \
+         AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY; the shared credentials file \
+         (~/.aws/credentials, profile from AWS_PROFILE, otherwise [default]); \
+         an ECS task role; an EC2 instance role. \
+         An SSO-only profile is not readable directly — run \
+         `aws configure export-credentials --profile <name> --format env` and export those."
+    )
+}
+
+/// Read static credentials out of the shared credentials file.
+///
+/// A deliberately small INI reader rather than a dependency: the file is a flat
+/// list of `[profile]` sections with `key = value` lines, and the three keys that
+/// matter are named below. A profile with no access key — an SSO profile, or one
+/// that only sets `role_arn` — yields nothing, so the chain moves on rather than
+/// returning half a credential.
+fn credentials_from_profile() -> Option<AwsCreds> {
+    let profile = std::env::var("AWS_PROFILE").unwrap_or_else(|_| "default".to_string());
+    let home = std::env::var("HOME").ok()?;
+    let path = std::env::var("AWS_SHARED_CREDENTIALS_FILE")
+        .unwrap_or_else(|_| format!("{home}/.aws/credentials"));
+    let creds = ini_section(&std::fs::read_to_string(&path).ok()?, &profile)?;
+
+    let access_key_id = creds.get("aws_access_key_id")?.clone();
+    let secret_access_key = creds.get("aws_secret_access_key")?.clone();
+
+    // The region lives in ~/.aws/config, under `[profile name]` — or plain
+    // `[default]` for the default profile, which is the one inconsistency in the
+    // whole format.
+    let region = std::env::var("AWS_REGION")
+        .or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
+        .ok()
+        .or_else(|| creds.get("region").cloned())
+        .or_else(|| {
+            let cfg = std::fs::read_to_string(format!("{home}/.aws/config")).ok()?;
+            let key = if profile == "default" {
+                "default".to_string()
+            } else {
+                format!("profile {profile}")
+            };
+            ini_section(&cfg, &key)?.get("region").cloned()
+        })
+        .unwrap_or_else(|| "us-east-1".to_string());
+
+    Some(AwsCreds {
+        access_key_id,
+        secret_access_key,
+        session_token: creds.get("aws_session_token").cloned(),
+        region,
+    })
+}
+
+/// Collect one `[section]` of an INI file into its key/value pairs.
+fn ini_section(text: &str, want: &str) -> Option<std::collections::HashMap<String, String>> {
+    let mut inside = false;
+    let mut out = std::collections::HashMap::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+        if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            inside = name.trim() == want;
+            continue;
+        }
+        if inside {
+            if let Some((k, v)) = line.split_once('=') {
+                out.insert(k.trim().to_ascii_lowercase(), v.trim().to_string());
+            }
+        }
+    }
+    if inside || !out.is_empty() {
+        Some(out)
+    } else {
+        None
+    }
 }
 
 /// Assume a customer's IAM role and return temporary credentials.
