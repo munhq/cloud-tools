@@ -1,30 +1,76 @@
+# Build the release binaries and publish them on a version tag.
+#
+# The asset names are a contract, not a convenience. Three consumers resolve
+# `cloud-tools-<arch>-<platform>` and verify it against one SHA256SUMS: the npm
+# wrapper in npm/bin/resolve.js, install.sh, and the Dockerfile. v0.1.0 published
+# `cloud-tools-v0.1.0-<rust-triple>.tar.gz` with a per-asset .sha256 instead, so
+# every one of those paths 404s against it. This file is what makes them work.
+#
+# Two shapes changed, and both matter:
+#   1. Bare binaries, not archives. The wrapper writes the downloaded bytes
+#      straight to the cache as an executable; a tarball lands there as a tarball.
+#   2. One SHA256SUMS over every asset, written last. release-npm.yml and
+#      smithery.yml poll for that file to decide the whole set is uploaded.
 name: release
 
 on:
   push:
     tags: ["v*"]
+  # Build without releasing, to prove a target compiles before a tag exists.
+  # The release job below is gated on the ref being a tag, so a dispatch on a
+  # branch produces artifacts and nothing public.
   workflow_dispatch:
 
 permissions:
   contents: write
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  binaries:
-    name: ${{ matrix.target }}
+  build:
+    name: ${{ matrix.arch }}-${{ matrix.plat }}
     runs-on: ${{ matrix.os }}
+    # Windows runners default to pwsh and every script step here is bash. Git
+    # Bash ships on the runner, so one default keeps the steps identical on all
+    # three platforms instead of forking them.
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
+            arch: x86_64
+            plat: linux
+            ext: ""
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
-            cross: true
+            arch: aarch64
+            plat: linux
+            ext: ""
           - target: x86_64-apple-darwin
             os: macos-latest
+            arch: x86_64
+            plat: macos
+            ext: ""
           - target: aarch64-apple-darwin
             os: macos-latest
+            arch: aarch64
+            plat: macos
+            ext: ""
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            arch: x86_64
+            plat: windows
+            ext: ".exe"
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
+            arch: aarch64
+            plat: windows
+            ext: ".exe"
     steps:
       - uses: actions/checkout@v4
 
@@ -36,35 +82,46 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      - name: Install cross-linker
-        if: matrix.cross
+      - name: Install the aarch64 cross-linker
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+          echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
 
-      - name: Build
-        run: cargo build --release --all-features --target ${{ matrix.target }}
-
-      - name: Package
-        shell: bash
+      # reqwest uses rustls, whose default provider is aws-lc-rs. aws-lc-sys
+      # assembles its x86 primitives with NASM, which the Windows runner does not
+      # ship, and the failure reads as a C build error rather than a missing tool.
+      # The aarch64 build uses no NASM, but one step for both Windows targets is
+      # simpler than a condition that has to stay right.
+      - name: Install NASM (aws-lc-sys needs it on Windows)
+        if: matrix.plat == 'windows'
         run: |
-          NAME="cloud-tools-${GITHUB_REF_NAME:-dev}-${{ matrix.target }}"
-          mkdir -p "dist/$NAME"
-          cp "target/${{ matrix.target }}/release/cloud-tools" "dist/$NAME/"
-          cp README.md LICENSE "dist/$NAME/" 2>/dev/null || true
-          tar -C dist -czf "$NAME.tar.gz" "$NAME"
-          shasum -a 256 "$NAME.tar.gz" > "$NAME.tar.gz.sha256"
+          choco install nasm -y --no-progress
+          echo "C:\Program Files\NASM" >> "$GITHUB_PATH"
+
+      # --locked: the release must build the dependency versions in Cargo.lock,
+      # not whatever resolves on the day. The lock is committed for exactly this.
+      - name: Build
+        run: cargo build --release --locked --all-features --target ${{ matrix.target }}
+
+      # The name the wrapper, install.sh and the Dockerfile all ask for. Nothing
+      # derives it at download time, so it is spelled out here once.
+      - name: Stage the asset
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/cloud-tools${{ matrix.ext }}" \
+             "dist/cloud-tools-${{ matrix.arch }}-${{ matrix.plat }}${{ matrix.ext }}"
+          ls -la dist
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.target }}
-          path: |
-            *.tar.gz
-            *.tar.gz.sha256
+          name: cloud-tools-${{ matrix.arch }}-${{ matrix.plat }}
+          path: dist/*
 
   release:
-    needs: binaries
+    needs: build
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
@@ -72,10 +129,25 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          merge-multiple: true
-      - uses: softprops/action-gh-release@v2
+          path: staged
+
+      # Checksums computed by CI, over the exact bytes being uploaded. A checksum
+      # served beside the binary is not proof on its own — whoever can replace one
+      # can replace the other — but it catches a truncated download and a
+      # mismatched tag, which are the failures that actually happen.
+      #
+      # SHA256SUMS is written LAST and uploaded with the binaries. release-npm.yml
+      # and smithery.yml wait for it as the signal that the whole set is up.
+      - name: Collect and checksum
+        run: |
+          mkdir -p dist
+          find staged -type f -exec cp {} dist/ \;
+          cd dist
+          sha256sum cloud-tools-* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
         with:
-          files: |
-            *.tar.gz
-            *.tar.gz.sha256
           generate_release_notes: true
+          files: dist/*
