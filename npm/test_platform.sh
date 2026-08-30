@@ -35,15 +35,19 @@ echo
 fail=0
 checked=0
 
+# Quoted, and -F, deliberately. This is called from inside a loop that sets
+# IFS='|' to split the case table, and an unquoted expansion there is re-split on
+# whatever IFS happens to be rather than on newlines. The asset names also carry
+# a dot, which -F stops grep reading as a pattern.
 is_published() {
-    printf '%s\n' $published | grep -qx -- "$1"
+    printf '%s\n' "$published" | grep -qxF -- "$1"
 }
 
 # ── 1. the npm resolver ──────────────────────────────────────────────────────
 # selftest.js prints `platform<TAB>arch<TAB>asset` for every platform the wrapper
 # claims. Every one must be a real asset, and every real asset must be claimed.
 resolved="$(cd "$here" && node bin/selftest.js 2>/dev/null | cut -f3 | sort -u)"
-for asset in $resolved; do
+for asset in $resolved; do  # default IFS here: one name per line
     checked=$((checked + 1))
     if ! is_published "$asset"; then
         echo "FAIL resolve.js offers $asset, which the release does not publish" >&2
@@ -52,7 +56,7 @@ for asset in $resolved; do
 done
 for asset in $published; do
     checked=$((checked + 1))
-    if ! printf '%s\n' $resolved | grep -qx -- "$asset"; then
+    if ! printf '%s\n' "$resolved" | grep -qxF -- "$asset"; then
         echo "FAIL the release publishes $asset, which resolve.js never asks for" >&2
         fail=$((fail + 1))
     fi

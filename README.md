@@ -96,6 +96,12 @@ A token with read access to account resources.
 
 ## Install
 
+> **Not released yet.** The newest tag is `v0.1.0`, which shipped `.tar.gz`
+> archives under the old asset names, and `@munhq/cloud-tools` is not on npm. The
+> three commands below start working the moment `v0.2.0` is tagged. Until then,
+> build from source: `cargo build --release`.
+
+
 ### As an MCP server
 
 ```bash
