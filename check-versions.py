@@ -6,8 +6,11 @@ to each other. The failure is quiet: npm serves 0.2.0 while server.json still
 declares 0.1.9, the registry validates the declared version against npm, and the
 publish returns a 400 that names a version nobody edited.
 
-Four places carry the number here. Cargo.toml is the source — it is what the
-binary is built from — and the rest have to agree with it.
+Five places carry the number here. Cargo.toml is the source — it is what the
+binary is built from — and the rest have to agree with it. The Dockerfile is the
+one that is easy to forget, because nothing builds it in CI: its ARG VERSION
+decides which release the image downloads, so a stale value produces an image of
+the previous version with the current label.
 
 Run it with no argument to check the manifests agree. Pass a version to also
 require that they agree with it, which is what release CI does with the tag:
@@ -35,6 +38,15 @@ def from_json(rel, *path):
     return f"{rel}:{'.'.join(str(p) for p in path)}", data
 
 
+def from_dockerfile(rel):
+    """The Dockerfile pins the release it fetches with `ARG VERSION=x.y.z`."""
+    text = (ROOT / rel).read_text()
+    match = re.search(r"^ARG VERSION=([0-9][^\s]*)", text, re.M)
+    if not match:
+        sys.exit(f"{rel}: no ARG VERSION — the check needs updating, not skipping")
+    return f"{rel}:ARG VERSION", match.group(1)
+
+
 def from_cargo(rel):
     """Cargo.toml is TOML, and only the [package] version counts.
 
@@ -57,6 +69,7 @@ def collect():
         from_json("npm/package.json", "version"),
         from_json("server.json", "version"),
         from_json("server.json", "packages", 0, "version"),
+        from_dockerfile("Dockerfile"),
     ]
 
 

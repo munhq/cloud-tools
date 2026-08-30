@@ -62,8 +62,32 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 echo "Downloading $ASSET"
-curl -fsSL -o "$TMP/$ASSET" "$BASE/$ASSET"
-curl -fsSL -o "$TMP/SHA256SUMS" "$BASE/SHA256SUMS"
+# A bare `curl -f` failure here prints "The requested URL returned error: 404"
+# and nothing about why. The likely cause is knowable: releases before v0.2.0
+# published .tar.gz archives named by Rust target triple, and this script asks
+# for the bare binaries that replaced them. Say which release was looked at and
+# what it actually holds.
+if ! curl -fsSL -o "$TMP/$ASSET" "$BASE/$ASSET"; then
+    echo "" >&2
+    echo "$ASSET is not in that release." >&2
+    if command -v curl >/dev/null; then
+        latest="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null \
+                  | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)"
+        [ -n "$latest" ] && echo "The newest release is ${latest}." >&2
+    fi
+    echo "" >&2
+    echo "Releases from v0.2.0 publish bare binaries named cloud-tools-<arch>-<platform>" >&2
+    echo "with one SHA256SUMS. Earlier ones published .tar.gz archives under a different" >&2
+    echo "name, which this script cannot use. Options:" >&2
+    echo "  - install from npm:  npx -y @munhq/cloud-tools" >&2
+    echo "  - build from source: cargo build --release" >&2
+    echo "  - pin a release:     VERSION=0.2.0 ./install.sh" >&2
+    exit 1
+fi
+if ! curl -fsSL -o "$TMP/SHA256SUMS" "$BASE/SHA256SUMS"; then
+    echo "That release publishes no SHA256SUMS, so the download cannot be verified." >&2
+    exit 1
+fi
 
 # The checksum sits beside the binary, so it is not proof against someone who can
 # replace both. It catches a truncated download and a release that never uploaded
