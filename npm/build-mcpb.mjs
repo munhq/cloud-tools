@@ -76,6 +76,13 @@ try {
     repository: { type: 'git', url: server.repository.url },
     license: pkg.license,
     keywords: pkg.keywords,
+    // Required by Anthropic's directory for a local connector, and its absence
+    // is an immediate rejection rather than a review comment. manifest_version
+    // 0.2+ takes an array of HTTPS URLs.
+    privacy_policies: [
+      'https://github.com/munhq/cloud-tools#privacy-policy',
+      'https://munhq.com/privacy',
+    ],
     // The bundle is what Claude Desktop installs, and its manifest is the only
     // place that install can get an icon from. Referenced by URL rather than
     // packed in, so the small bundle stays small.

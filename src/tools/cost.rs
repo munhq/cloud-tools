@@ -226,49 +226,98 @@ impl Default for CloudTools {
 #[tool_router]
 impl CloudTools {
     #[tool(
-        description = "Cloud spend. AWS: by service over a date range, from Cost Explorer; pass group_by=\"data_transfer\" for transfer cost by usage type. GCP: by service from the BigQuery billing export, which credentials.gcp.billing_table must name — without it you get budget amounts, not spend. Cloudflare: subscriptions and zone plan costs. OVH: the 6 most recent invoices."
+        description = "Cloud spend. AWS: by service over a date range, from Cost Explorer; pass group_by=\"data_transfer\" for transfer cost by usage type. GCP: by service from the BigQuery billing export, which credentials.gcp.billing_table must name — without it you get budget amounts, not spend. Cloudflare: subscriptions and zone plan costs. OVH: the 6 most recent invoices.",
+        annotations(
+            title = "Cloud spend",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
     )]
     async fn get_costs(&self, Parameters(input): Parameters<CostsInput>) -> String {
         answer(self.costs(input).await)
     }
 
     #[tool(
-        description = "This period against the same day window of the previous month, so a partial month does not read as a fall. AWS and GCP only. GCP needs credentials.gcp.billing_table."
+        description = "This period against the same day window of the previous month, so a partial month does not read as a fall. AWS and GCP only. GCP needs credentials.gcp.billing_table.",
+        annotations(
+            title = "Spend, month over month",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
     )]
     async fn compare_costs(&self, Parameters(input): Parameters<CloudInput>) -> String {
         answer(self.compare(input).await)
     }
 
     #[tool(
-        description = "What exists. GCP: GCE instances, disks, addresses, snapshots, forwarding rules, GKE clusters with node pools, Cloud SQL, Cloud Functions, Cloud Run, GCS buckets, Cloud NAT, Cloud IDS, Artifact Registry, VPN gateways, subnets, PSC endpoints and Cloud Logging ingestion, with a per-project summary. Cloudflare: zones with plan and price, DNS records split proxied against dns-only, certificates with hosts and expiry, and Workers with invocation counts. OVH: instances and active services with renewal dates and monthly cost. Not implemented for AWS."
+        description = "What exists. GCP: GCE instances, disks, addresses, snapshots, forwarding rules, GKE clusters with node pools, Cloud SQL, Cloud Functions, Cloud Run, GCS buckets, Cloud NAT, Cloud IDS, Artifact Registry, VPN gateways, subnets, PSC endpoints and Cloud Logging ingestion, with a per-project summary. Cloudflare: zones with plan and price, DNS records split proxied against dns-only, certificates with hosts and expiry, and Workers with invocation counts. OVH: instances and active services with renewal dates and monthly cost. Not implemented for AWS.",
+        annotations(
+            title = "Cloud inventory",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
     )]
     async fn get_inventory(&self, Parameters(input): Parameters<CloudInput>) -> String {
         answer(self.inventory(input).await)
     }
 
     #[tool(
-        description = "What is wasted, with the monthly cost of each finding and the utilisation evidence behind it. AWS: idle and oversized EC2 and RDS measured from CloudWatch CPU series, stopped instances, orphaned volumes and snapshots, unused AMIs and Elastic IPs, idle load balancers and NAT gateways, DynamoDB and ElastiCache, and log groups with no retention. GCP: idle and oversized instances, orphaned disks, unattached addresses, snapshots over 90 days, idle Cloud SQL, GKE clusters with no nodes, Cloud Functions and Cloud Run with no invocations, buckets with no lifecycle rule. Not implemented for Cloudflare or OVH."
+        description = "What is wasted, with the monthly cost of each finding and the utilisation evidence behind it. AWS: idle and oversized EC2 and RDS measured from CloudWatch CPU series, stopped instances, orphaned volumes and snapshots, unused AMIs and Elastic IPs, idle load balancers and NAT gateways, DynamoDB and ElastiCache, and log groups with no retention. GCP: idle and oversized instances, orphaned disks, unattached addresses, snapshots over 90 days, idle Cloud SQL, GKE clusters with no nodes, Cloud Functions and Cloud Run with no invocations, buckets with no lifecycle rule. Not implemented for Cloudflare or OVH.",
+        annotations(
+            title = "Wasted spend",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
     )]
     async fn get_waste(&self, Parameters(input): Parameters<CloudInput>) -> String {
         answer(self.waste(input).await)
     }
 
     #[tool(
-        description = "Commitments you are paying for, and whether you are consuming them, over the last 30 days. AWS: Savings Plans utilisation, coverage of eligible spend, and the saving a further commitment would give. GCP: committed use discounts with their expiry. Not implemented for Cloudflare or OVH, which sell no commitments."
+        description = "Commitments you are paying for, and whether you are consuming them, over the last 30 days. AWS: Savings Plans utilisation, coverage of eligible spend, and the saving a further commitment would give. GCP: committed use discounts with their expiry. Not implemented for Cloudflare or OVH, which sell no commitments.",
+        annotations(
+            title = "Commitment utilisation",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
     )]
     async fn get_commitments(&self, Parameters(input): Parameters<CloudInput>) -> String {
         answer(self.commitments(input).await)
     }
 
     #[tool(
-        description = "The cloud provider's own optimisation suggestions. GCP: the Recommender API across every zone and region — idle VMs, machine type rightsizing, idle disks and addresses, idle and oversized Cloud SQL. Not implemented for the others; AWS Compute Optimizer is read as part of get_waste instead."
+        description = "The cloud provider's own optimisation suggestions. GCP: the Recommender API across every zone and region — idle VMs, machine type rightsizing, idle disks and addresses, idle and oversized Cloud SQL. Not implemented for the others; AWS Compute Optimizer is read as part of get_waste instead.",
+        annotations(
+            title = "Provider recommendations",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
     )]
     async fn get_recommendations(&self, Parameters(input): Parameters<CloudInput>) -> String {
         answer(self.recommendations(input).await)
     }
 
     #[tool(
-        description = "One cost and waste report over every cloud you pass credentials for, with a grand total. Omit a cloud's credentials to skip it."
+        description = "One cost and waste report over every cloud you pass credentials for, with a grand total. Omit a cloud's credentials to skip it.",
+        annotations(
+            title = "Cross-cloud summary",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
     )]
     async fn get_cross_cloud_summary(&self, Parameters(input): Parameters<SummaryInput>) -> String {
         answer(self.summary(input).await)
