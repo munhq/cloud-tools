@@ -26,3 +26,7 @@ card.json
 # Internal planning notes. This repository is PUBLIC — infrastructure
 # hostnames, cluster layout and commercial plans do not belong in it.
 .local/
+
+# Local commit guard. Not committed: it is machine tooling, and the list it
+# reads deliberately lives outside every repository.
+.githooks/

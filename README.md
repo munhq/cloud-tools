@@ -4,40 +4,55 @@ Multi-cloud cost, inventory and waste analysis in Rust — exposed as an **MCP s
 
 It reports spend and waste: idle instances, oversized nodes, previous-generation hardware, unattached resources, and commitments you are not using.
 
-## Seven tools, one shape
+## Eight tools, one shape
 
-Every tool takes the same two arguments: `cloud`, and `credentials` for that
-cloud. Nothing is stored, and every call is read-only.
+Every tool takes `cloud` and nothing else it does not need. **Credentials never
+appear in a tool call** — the server reads them from its own environment, so the
+agent never handles a secret and never needs to be told one.
 
 ```json
-{ "cloud": "aws", "credentials": { "aws": {} } }
-{ "cloud": "gcp", "credentials": { "gcp": { "project_ids": ["example-prod"] } } }
+{ "cloud": "aws" }
+{ "cloud": "gcp" }
 ```
+
+Start with `check_access`. It takes no arguments, contacts no cloud, and reports
+which clouds this server can reach and what is missing for the ones it cannot.
 
 | Tool | AWS | GCP | Cloudflare | OVH |
 |---|:--:|:--:|:--:|:--:|
-| `get_costs` | yes | needs `billing_table` | yes | yes |
-| `compare_costs` | yes | needs `billing_table` | — | — |
+| `check_access` | reports configuration for all four | | | |
+| `get_costs` | yes | needs a billing table | yes | yes |
+| `compare_costs` | yes | needs a billing table | — | — |
 | `get_inventory` | — | yes | yes | yes |
 | `get_waste` | yes | yes | — | — |
 | `get_commitments` | yes | yes | — | — |
 | `get_recommendations` | — | yes | — | — |
-| `get_cross_cloud_summary` | all four at once; a cloud you omit is skipped | | | |
+| `get_cross_cloud_summary` | every cloud the server can reach | | | |
 
 A dash is not a silent empty result. The tool answers, for example,
 `waste analysis is not implemented for ovh; supported: aws, gcp`, so an agent
 cannot read a gap as a clean bill.
 
-Coverage is uneven because the analysis behind it is uneven. Waste rules for
-Cloudflare and OVH would be guesses rather than measurements, so they are
-absent rather than wrong. AWS inventory is the one gap that is only unbuilt: the
-listing calls exist and `get_waste` already uses them.
+### Reading a zero correctly
 
-## Credentials, per cloud
+`get_waste` and `get_inventory` return a `coverage` field and an `errors` list.
+A zero total means one of two entirely different things:
+
+| coverage | meaning |
+|---|---|
+| `complete` | Nothing is wasted. |
+| `PARTIAL — N API call(s) failed…` | **Part of the account could not be read.** |
+
+A partial result is not a clean bill of health.
+
+## Configuring the server
+
+Credentials are read from the environment of the machine running cloud-tools.
+Nothing is stored, and every call is read-only.
 
 ### AWS
 
-Resolved on the machine running the server, in this order, first match winning:
+Resolved in this order, first match winning:
 
 1. `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`
 2. `~/.aws/credentials`, profile from `AWS_PROFILE`, otherwise `[default]`
@@ -47,14 +62,15 @@ Resolved on the machine running the server, in this order, first match winning:
 An SSO-only profile is not read directly. Export it first:
 `aws configure export-credentials --profile <name> --format env`.
 
+To scan a *different* account, pass a role to assume. A role ARN is not a
+secret, so it stays an argument:
+
 ```json
-{ "aws": {} }                                                  // your own account
-{ "aws": { "role_arn": "arn:aws:iam::…:role/ReadOnly" } }      // assume a role
-{ "aws": { "role_arn": "…", "external_id": "…" } }             // …with an external ID
+{ "cloud": "aws", "target": { "role_arn": "arn:aws:iam::…:role/ReadOnly" } }
 ```
 
-`role_arn` is optional. Give it to scan an account other than the one whose
-credentials the server holds; omit it to use those credentials directly.
+`CLOUD_TOOLS_AWS_ROLE_ARN` and `CLOUD_TOOLS_AWS_EXTERNAL_ID` set a default for
+that, if every call should assume the same role.
 
 `get_waste` reads EC2 instances, volumes, snapshots, AMIs, Elastic IPs, key
 pairs and reserved instances; RDS; S3; Lambda; DynamoDB; ECS; ElastiCache; load
@@ -64,14 +80,16 @@ measured rather than guessed.
 
 ### GCP
 
-Application Default Credentials by default — `gcloud auth application-default
-login` is enough. `project_ids` is required.
+Application Default Credentials — `gcloud auth application-default login` is
+enough — or `GOOGLE_APPLICATION_CREDENTIALS` pointing at a service-account file.
 
-```json
-{ "gcp": { "project_ids": ["example-prod", "example-dev"] } }
-{ "gcp": { "project_ids": ["…"], "service_account_json": "{…}" } }
-{ "gcp": { "project_ids": ["…"], "billing_table": "example.billing.gcp_billing_export_v1_XXXX" } }
-```
+| Variable | Purpose |
+|---|---|
+| `CLOUD_TOOLS_GCP_PROJECTS` | Comma-separated project IDs to query |
+| `CLOUD_TOOLS_GCP_BILLING_TABLE` | BigQuery billing export, `project.dataset.table` |
+
+Projects can also be chosen per call with `target.project_ids`, which is how one
+agent scans several.
 
 `billing_table` matters. Google publishes no per-service spend API, so real
 costs come from the BigQuery billing export. Without it, `get_costs` falls back
@@ -80,19 +98,19 @@ saying these are budget amounts, not spend. `compare_costs` requires it outright
 
 ### Cloudflare
 
-```json
-{ "cloudflare": { "api_token": "…", "account_id": "…" } }
 ```
-
-A token with read access to account resources.
+CLOUDFLARE_API_TOKEN     a token with read access to account resources
+CLOUDFLARE_ACCOUNT_ID
+```
 
 ### OVH
 
-```json
-{ "ovh": { "app_key": "…", "app_secret": "…", "consumer_key": "…", "endpoint": "ovh-eu" } }
 ```
-
-`endpoint` defaults to `ovh-eu`; `ovh-us` and `ovh-ca` are the alternatives.
+OVH_APPLICATION_KEY
+OVH_APPLICATION_SECRET
+OVH_CONSUMER_KEY
+OVH_ENDPOINT             ovh-eu (default), ovh-us or ovh-ca
+```
 
 ## Install
 
