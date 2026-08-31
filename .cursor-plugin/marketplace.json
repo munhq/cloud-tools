@@ -1,0 +1,17 @@
+{
+  "name": "cloud-tools",
+  "owner": {
+    "name": "munhq"
+  },
+  "metadata": {
+    "description": "Multi-cloud cost, inventory and waste analysis for agents: what you spend by service, region and account, and what is idle, oversized, previous-generation, unattached or an unused commitment. AWS, GCP, Cloudflare and OVH.",
+    "version": "0.2.0"
+  },
+  "plugins": [
+    {
+      "name": "cloud-tools",
+      "source": "./plugin",
+      "description": "A skill that teaches an agent to answer cloud spend and waste questions against a real account, and to read a zero total correctly. Bundles the cloud-tools MCP server so install wires everything in one step."
+    }
+  ]
+}

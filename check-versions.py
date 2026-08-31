@@ -6,7 +6,7 @@ to each other. The failure is quiet: npm serves 0.2.0 while server.json still
 declares 0.1.9, the registry validates the declared version against npm, and the
 publish returns a 400 that names a version nobody edited.
 
-Five places carry the number here. Cargo.toml is the source — it is what the
+Seven places carry the number here. Cargo.toml is the source — it is what the
 binary is built from — and the rest have to agree with it. The Dockerfile is the
 one that is easy to forget, because nothing builds it in CI: its ARG VERSION
 decides which release the image downloads, so a stale value produces an image of
@@ -70,6 +70,11 @@ def collect():
         from_json("server.json", "version"),
         from_json("server.json", "packages", 0, "version"),
         from_dockerfile("Dockerfile"),
+        # The plugin manifests. codeindex shipped two releases advertising an old
+        # version because its .cursor-plugin/marketplace.json was bumped by hand
+        # and missed; nothing compared it to anything.
+        from_json("plugin/.claude-plugin/plugin.json", "version"),
+        from_json(".cursor-plugin/marketplace.json", "metadata", "version"),
     ]
 
 

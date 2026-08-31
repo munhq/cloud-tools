@@ -1,0 +1,19 @@
+{
+  "name": "cloud-tools",
+  "description": "A skill that teaches an agent to answer cloud spend and waste questions against a real account, and to read a zero total correctly. Bundles the cloud-tools MCP server so install wires everything in one step.",
+  "version": "0.2.0",
+  "author": {
+    "name": "munhq"
+  },
+  "homepage": "https://github.com/munhq/cloud-tools",
+  "repository": "https://github.com/munhq/cloud-tools",
+  "license": "Apache-2.0",
+  "keywords": [
+    "finops",
+    "cloud-cost",
+    "aws",
+    "gcp",
+    "cost-optimization",
+    "mcp"
+  ]
+}
