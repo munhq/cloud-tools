@@ -26,17 +26,27 @@ use crate::clouds::ovh::{
 };
 use crate::types::CostEntry;
 
-// ── One credential shape, one cloud selector ─────────────────────────────────
+// ── Selectors in the schema, secrets in the environment ──────────────────────
 //
-// Every tool below takes the same two things: which cloud, and the credentials
-// for it. That is the whole of the unification. The surface used to be thirteen
-// tools whose names encoded the cloud — get_aws_costs beside get_gcp_inventory —
-// so an agent had to learn a different name, and a different argument shape, for
-// every cloud and capability pair. Seven tools with one shape replace them.
+// Every tool used to take a `credentials` object carrying all four clouds'
+// secrets. That was wrong three times over.
 //
-// The credentials are a struct of optionals rather than an enum, because
-// get_cross_cloud_summary needs several at once and the alternative is two
-// vocabularies for the same thing.
+// It asked the AGENT to hold the secrets, which means something has to put them
+// into the agent's context first — where they land in transcripts and logs.
+//
+// It cost every user tokens forever. The credential definitions came to ~2,530
+// bytes, repeated in all seven tool schemas: ~17.7 KB of a 21 KB total, about
+// 6,250 tokens present in every conversation before a single call.
+//
+// And it ignored the setup people already have. A developer has
+// ~/.aws/credentials and has run `gcloud auth application-default login`. The
+// agent cannot know that, so it passed nothing, and a tool that would have
+// worked returned an error about a missing credentials block.
+//
+// So: secrets come from the server's environment, the way AWS and GCP already
+// resolved theirs. What stays in the schema is the SELECTOR — which account,
+// which projects — because that is not a secret and an agent legitimately needs
+// to choose it.
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -73,91 +83,115 @@ fn unsupported(what: &str, cloud: &Cloud, supported: &[&str]) -> anyhow::Error {
     )
 }
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct AwsCredentials {
-    #[schemars(
-        description = "Optional IAM Role ARN to assume, e.g. arn:aws:iam::123456789012:role/CloudToolsReadOnly. \
-                       Omit it to use the server's own credentials directly, which is what you want when \
-                       cloud-tools runs on your machine against your own account."
-    )]
+/// One environment variable, or nothing.
+fn env(key: &str) -> Option<String> {
+    std::env::var(key).ok().filter(|v| !v.trim().is_empty())
+}
+
+// The selector a caller may pass. Never a secret.
+//
+// Every field is optional, and each is only needed to look at something other
+// than the server's default: another AWS account, or particular GCP projects.
+//
+// The descriptions here are deliberately terse. This struct is inlined into all
+// seven tool schemas, so every word costs seven times over in the context of
+// every conversation that loads this server. The long version belongs in the
+// README, which is read once.
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+pub struct Target {
+    /// AWS role to assume, to scan another account.
     pub role_arn: Option<String>,
-    #[schemars(description = "Optional external ID, when the role's trust policy requires one")]
+    /// External ID, if that role's trust policy needs one.
+    pub external_id: Option<String>,
+    /// GCP projects to query. Defaults to the server's configuration.
+    pub project_ids: Option<Vec<String>>,
+}
+
+/// AWS: the role to assume, if any. The credentials themselves come from the
+/// server's chain — env vars, ~/.aws/credentials, an ECS task role, an EC2
+/// instance role.
+pub struct AwsTarget {
+    pub role_arn: Option<String>,
     pub external_id: Option<String>,
 }
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct GcpCredentials {
-    #[schemars(
-        description = "One or more GCP project IDs, e.g. [\"example-dev\", \"example-prod\"]"
-    )]
+/// GCP: which projects. Credentials come from Application Default Credentials
+/// or GOOGLE_APPLICATION_CREDENTIALS, both resolved in `clouds::gcp::auth`.
+pub struct GcpTarget {
     pub project_ids: Vec<String>,
-    #[schemars(
-        description = "Optional service account JSON. Omit it to use Application Default Credentials from `gcloud auth application-default login`."
-    )]
-    pub service_account_json: Option<String>,
-    #[schemars(
-        description = "Optional BigQuery billing export table, as project.dataset.table. \
-                       REQUIRED for get_costs and compare_costs on GCP: Google publishes no \
-                       per-service spend API, so the numbers come from the billing export. \
-                       Without it, get_costs falls back to the Budgets API, which returns \
-                       budget amounts rather than actual spend."
-    )]
     pub billing_table: Option<String>,
 }
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct CloudflareCredentials {
-    #[schemars(description = "Cloudflare API token with read access to account resources")]
+/// Cloudflare and OVH have no ambient credential mechanism of their own, so the
+/// server reads named variables. The names match each vendor's own convention,
+/// so anyone who already exports them for the vendor's CLI needs to do nothing.
+pub struct CloudflareTarget {
     pub api_token: String,
-    #[schemars(description = "Cloudflare account ID")]
     pub account_id: String,
 }
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct OvhCredentials {
-    #[schemars(description = "OVH application key")]
+pub struct OvhTarget {
     pub app_key: String,
-    #[schemars(description = "OVH application secret")]
     pub app_secret: String,
-    #[schemars(description = "OVH consumer key")]
     pub consumer_key: String,
-    #[schemars(description = "OVH API endpoint: ovh-eu (default), ovh-us, or ovh-ca")]
-    pub endpoint: Option<String>,
+    pub endpoint: String,
 }
 
-/// Credentials for any subset of the clouds.
-///
-/// A single-cloud tool reads the one field matching its `cloud` argument;
-/// get_cross_cloud_summary reads every field it is given and skips the rest.
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct Credentials {
-    pub aws: Option<AwsCredentials>,
-    pub gcp: Option<GcpCredentials>,
-    pub cloudflare: Option<CloudflareCredentials>,
-    pub ovh: Option<OvhCredentials>,
-}
+impl Target {
+    fn aws(&self) -> AwsTarget {
+        AwsTarget {
+            role_arn: self
+                .role_arn
+                .clone()
+                .or_else(|| env("CLOUD_TOOLS_AWS_ROLE_ARN")),
+            external_id: self
+                .external_id
+                .clone()
+                .or_else(|| env("CLOUD_TOOLS_AWS_EXTERNAL_ID")),
+        }
+    }
 
-impl Credentials {
-    fn aws(&self) -> Result<&AwsCredentials> {
-        self.aws.as_ref().context(
-            "credentials.aws is missing. It may be an empty object: AWS works from the \
-                      server's own credentials unless you pass a role_arn to assume.",
-        )
+    fn gcp(&self) -> Result<GcpTarget> {
+        let project_ids = match &self.project_ids {
+            Some(p) if !p.is_empty() => p.clone(),
+            _ => env("CLOUD_TOOLS_GCP_PROJECTS")
+                .map(|v| {
+                    v.split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect::<Vec<_>>()
+                })
+                .filter(|v: &Vec<String>| !v.is_empty())
+                .context(
+                    "No GCP project to query. Pass project_ids, or set CLOUD_TOOLS_GCP_PROJECTS \
+                     on the server to a comma-separated list.",
+                )?,
+        };
+        Ok(GcpTarget {
+            project_ids,
+            billing_table: env("CLOUD_TOOLS_GCP_BILLING_TABLE"),
+        })
     }
-    fn gcp(&self) -> Result<&GcpCredentials> {
-        self.gcp
-            .as_ref()
-            .context("credentials.gcp is missing. It needs at least project_ids.")
+
+    fn cloudflare(&self) -> Result<CloudflareTarget> {
+        Ok(CloudflareTarget {
+            api_token: env("CLOUDFLARE_API_TOKEN")
+                .context("CLOUDFLARE_API_TOKEN is not set on the server.")?,
+            account_id: env("CLOUDFLARE_ACCOUNT_ID")
+                .context("CLOUDFLARE_ACCOUNT_ID is not set on the server.")?,
+        })
     }
-    fn cloudflare(&self) -> Result<&CloudflareCredentials> {
-        self.cloudflare
-            .as_ref()
-            .context("credentials.cloudflare is missing. It needs api_token and account_id.")
-    }
-    fn ovh(&self) -> Result<&OvhCredentials> {
-        self.ovh
-            .as_ref()
-            .context("credentials.ovh is missing. It needs app_key, app_secret and consumer_key.")
+
+    fn ovh(&self) -> Result<OvhTarget> {
+        Ok(OvhTarget {
+            app_key: env("OVH_APPLICATION_KEY")
+                .context("OVH_APPLICATION_KEY is not set on the server.")?,
+            app_secret: env("OVH_APPLICATION_SECRET")
+                .context("OVH_APPLICATION_SECRET is not set on the server.")?,
+            consumer_key: env("OVH_CONSUMER_KEY")
+                .context("OVH_CONSUMER_KEY is not set on the server.")?,
+            endpoint: env("OVH_ENDPOINT").unwrap_or_else(|| "ovh-eu".to_string()),
+        })
     }
 }
 
@@ -167,7 +201,6 @@ impl Credentials {
 pub struct CostsInput {
     #[schemars(description = "Which cloud to query: aws, gcp, cloudflare or ovh")]
     pub cloud: Cloud,
-    pub credentials: Credentials,
     #[schemars(
         description = "Start date inclusive, YYYY-MM-DD. AWS and GCP only; defaults to 30 days ago."
     )]
@@ -178,26 +211,29 @@ pub struct CostsInput {
     pub end_date: Option<String>,
     #[schemars(
         description = "AWS only. \"service\" (default) breaks spend down by service; \
-                       \"data_transfer\" breaks it down by transfer usage type instead — \
-                       internet egress, cross-AZ and inter-region."
+                       \"data_transfer\" breaks it down by transfer usage type instead."
     )]
     pub group_by: Option<String>,
+    #[serde(default)]
+    pub target: Target,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct CloudInput {
     #[schemars(description = "Which cloud to query: aws, gcp, cloudflare or ovh")]
     pub cloud: Cloud,
-    pub credentials: Credentials,
+    #[serde(default)]
+    pub target: Target,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct SummaryInput {
-    #[schemars(
-        description = "Credentials for every cloud to include. A cloud you omit is skipped."
-    )]
-    pub credentials: Credentials,
+    #[serde(default)]
+    pub target: Target,
 }
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct NoInput {}
 
 // ── MCP server handler ────────────────────────────────────────────────────────
 
@@ -225,6 +261,20 @@ impl Default for CloudTools {
 
 #[tool_router]
 impl CloudTools {
+    #[tool(
+        description = "Which clouds this server can reach, and what is missing for the ones it cannot. Call this first: it is cheap, needs no arguments, and turns a guess about credentials into a fact. It reports configuration only and contacts no cloud.",
+        annotations(
+            title = "Check cloud access",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn check_access(&self, Parameters(_): Parameters<NoInput>) -> String {
+        answer(self.access())
+    }
+
     #[tool(
         description = "Cloud spend. AWS: by service over a date range, from Cost Explorer; pass group_by=\"data_transfer\" for transfer cost by usage type. GCP: by service from the BigQuery billing export, which credentials.gcp.billing_table must name — without it you get budget amounts, not spend. Cloudflare: subscriptions and zone plan costs. OVH: the 6 most recent invoices.",
         annotations(
@@ -367,7 +417,7 @@ impl CloudTools {
     /// they had to create a role in their account that trusts themselves before
     /// a single tool would answer. Omitting it uses the credentials the server
     /// already resolved.
-    async fn aws_creds(&self, c: &AwsCredentials) -> Result<AwsCreds> {
+    async fn aws_creds(&self, c: &AwsTarget) -> Result<AwsCreds> {
         match c.role_arn.as_deref() {
             Some(arn) => assume_role(&self.http, arn, c.external_id.as_deref()).await,
             None => ambient_credentials(&self.http).await,
@@ -375,17 +425,73 @@ impl CloudTools {
     }
 
     /// GCP credentials for the first project, carrying the billing table.
-    fn gcp_for(&self, c: &GcpCredentials, project_id: &str) -> Result<GcpCreds> {
-        Self::gcp_creds(
-            project_id,
-            c.service_account_json.as_deref(),
-            c.billing_table.clone(),
-            None,
-        )
+    fn gcp_for(&self, c: &GcpTarget, project_id: &str) -> Result<GcpCreds> {
+        Self::gcp_creds(project_id, None, c.billing_table.clone(), None)
+    }
+
+    /// What the server can reach, without contacting anything.
+    ///
+    /// An agent that cannot see the operator's environment otherwise has to
+    /// guess, call a scan, and read a failure. This turns that into one cheap
+    /// question, and it names the variable to set rather than saying "not
+    /// configured".
+    fn access(&self) -> Result<String> {
+        let t = Target::default();
+        let clouds = [
+            (
+                "aws",
+                true,
+                "the credential chain: AWS_ACCESS_KEY_ID, ~/.aws/credentials \
+                 (AWS_PROFILE, else [default]), an ECS task role, or an EC2 instance role"
+                    .to_string(),
+            ),
+            (
+                "gcp",
+                t.gcp().is_ok(),
+                match t.gcp() {
+                    Ok(g) => format!("projects: {}", g.project_ids.join(", ")),
+                    Err(e) => e.to_string(),
+                },
+            ),
+            (
+                "cloudflare",
+                t.cloudflare().is_ok(),
+                match t.cloudflare() {
+                    Ok(_) => "CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are set".to_string(),
+                    Err(e) => e.to_string(),
+                },
+            ),
+            (
+                "ovh",
+                t.ovh().is_ok(),
+                match t.ovh() {
+                    Ok(o) => format!("configured, endpoint {}", o.endpoint),
+                    Err(e) => e.to_string(),
+                },
+            ),
+        ];
+
+        let rows: Vec<_> = clouds
+            .iter()
+            .map(|(name, ok, detail)| {
+                serde_json::json!({ "cloud": name, "configured": ok, "detail": detail })
+            })
+            .collect();
+
+        Ok(serde_json::to_string_pretty(&serde_json::json!({
+            "clouds": rows,
+            // AWS reports configured because its chain always has somewhere to
+            // look. Whether anything answers is only knowable by calling it, and
+            // this tool deliberately calls nothing.
+            "note": "Configuration only — no cloud was contacted. GCP costs additionally need \
+                     CLOUD_TOOLS_GCP_BILLING_TABLE, a BigQuery billing export; without it \
+                     get_costs returns budget amounts and says so.",
+            "billing_table_set": env("CLOUD_TOOLS_GCP_BILLING_TABLE").is_some(),
+        }))?)
     }
 
     async fn costs(&self, input: CostsInput) -> Result<String> {
-        let cr = &input.credentials;
+        let t = &input.target;
         // A missing range means the last 30 days, which is the window every one
         // of these APIs is cheapest to answer for.
         let end = input
@@ -399,7 +505,7 @@ impl CloudTools {
 
         match input.cloud {
             Cloud::Aws => {
-                let aws = cr.aws()?;
+                let aws = &t.aws();
                 match input.group_by.as_deref() {
                     Some("data_transfer") => {
                         let s = NaiveDate::parse_from_str(&start, "%Y-%m-%d").map_err(|_| {
@@ -416,9 +522,9 @@ impl CloudTools {
                     )),
                 }
             }
-            Cloud::Gcp => self.gcp_costs(cr.gcp()?, &start, &end).await,
-            Cloud::Cloudflare => self.fetch_cf_costs(cr.cloudflare()?).await,
-            Cloud::Ovh => self.fetch_ovh_costs(cr.ovh()?).await,
+            Cloud::Gcp => self.gcp_costs(&t.gcp()?, &start, &end).await,
+            Cloud::Cloudflare => self.fetch_cf_costs(&t.cloudflare()?).await,
+            Cloud::Ovh => self.fetch_ovh_costs(&t.ovh()?).await,
         }
     }
 
@@ -433,7 +539,7 @@ impl CloudTools {
     /// `project_ids` is a list and every other GCP arm walks all of it. This one
     /// read `.first()` and dropped the rest, so a caller asking about four
     /// projects was answered about one — silently, with a plausible number.
-    async fn gcp_costs(&self, c: &GcpCredentials, start: &str, end: &str) -> Result<String> {
+    async fn gcp_costs(&self, c: &GcpTarget, start: &str, end: &str) -> Result<String> {
         if c.project_ids.is_empty() {
             anyhow::bail!("credentials.gcp.project_ids is empty");
         }
@@ -487,11 +593,11 @@ impl CloudTools {
     }
 
     async fn compare(&self, input: CloudInput) -> Result<String> {
-        let cr = &input.credentials;
+        let t = &input.target;
         match input.cloud {
-            Cloud::Aws => self.do_compare_costs(cr.aws()?).await,
+            Cloud::Aws => self.do_compare_costs(&t.aws()).await,
             Cloud::Gcp => {
-                let c = cr.gcp()?;
+                let c = &t.gcp()?;
                 let project = c
                     .project_ids
                     .first()
@@ -505,11 +611,11 @@ impl CloudTools {
     }
 
     async fn inventory(&self, input: CloudInput) -> Result<String> {
-        let cr = &input.credentials;
+        let t = &input.target;
         match input.cloud {
-            Cloud::Gcp => self.fetch_gcp_inventory(cr.gcp()?).await,
-            Cloud::Cloudflare => self.fetch_cf_inventory(cr.cloudflare()?).await,
-            Cloud::Ovh => self.fetch_ovh_inventory(cr.ovh()?).await,
+            Cloud::Gcp => self.fetch_gcp_inventory(&t.gcp()?).await,
+            Cloud::Cloudflare => self.fetch_cf_inventory(&t.cloudflare()?).await,
+            Cloud::Ovh => self.fetch_ovh_inventory(&t.ovh()?).await,
             // The building blocks exist — waste analysis lists EC2, RDS, S3 and
             // the rest — but nothing assembles them into an inventory yet.
             ref other => Err(unsupported(
@@ -521,10 +627,10 @@ impl CloudTools {
     }
 
     async fn waste(&self, input: CloudInput) -> Result<String> {
-        let cr = &input.credentials;
+        let t = &input.target;
         match input.cloud {
             Cloud::Aws => {
-                let creds = self.aws_creds(cr.aws()?).await?;
+                let creds = self.aws_creds(&t.aws()).await?;
                 let (findings, failures) =
                     crate::analyzers::waste::analyse_reporting(&self.http, &creds).await?;
                 let total: f64 = findings.iter().map(|f| f.estimated_monthly_usd).sum();
@@ -545,17 +651,17 @@ impl CloudTools {
                     },
                 }))?)
             }
-            Cloud::Gcp => self.do_find_gcp_waste(cr.gcp()?).await,
+            Cloud::Gcp => self.do_find_gcp_waste(&t.gcp()?).await,
             ref other => Err(unsupported("waste analysis", other, &["aws", "gcp"])),
         }
     }
 
     async fn commitments(&self, input: CloudInput) -> Result<String> {
-        let cr = &input.credentials;
+        let t = &input.target;
         match input.cloud {
-            Cloud::Aws => self.do_savings_plans(cr.aws()?).await,
+            Cloud::Aws => self.do_savings_plans(&t.aws()).await,
             Cloud::Gcp => {
-                let c = cr.gcp()?;
+                let c = &t.gcp()?;
                 let mut all = Vec::new();
                 for project in &c.project_ids {
                     let creds = self.gcp_for(c, project)?;
@@ -581,18 +687,18 @@ impl CloudTools {
     }
 
     async fn recommendations(&self, input: CloudInput) -> Result<String> {
-        let cr = &input.credentials;
+        let t = &input.target;
         match input.cloud {
-            Cloud::Gcp => self.fetch_gcp_recommendations(cr.gcp()?).await,
+            Cloud::Gcp => self.fetch_gcp_recommendations(&t.gcp()?).await,
             ref other => Err(unsupported("provider recommendations", other, &["gcp"])),
         }
     }
 
     async fn summary(&self, input: SummaryInput) -> Result<String> {
-        self.fetch_cross_cloud_summary(&input.credentials).await
+        self.fetch_cross_cloud_summary(&input.target).await
     }
 
-    async fn do_savings_plans(&self, input: &AwsCredentials) -> Result<String> {
+    async fn do_savings_plans(&self, input: &AwsTarget) -> Result<String> {
         let creds = self.aws_creds(input).await?;
         let now = Utc::now().date_naive();
         let start = now - chrono::Duration::days(30);
@@ -607,7 +713,7 @@ impl CloudTools {
     /// group_by="data_transfer".
     async fn do_data_transfer(
         &self,
-        input: &AwsCredentials,
+        input: &AwsTarget,
         start: NaiveDate,
         end: NaiveDate,
     ) -> Result<String> {
@@ -627,7 +733,7 @@ impl CloudTools {
         Ok(serde_json::to_string_pretty(&output)?)
     }
 
-    async fn do_compare_costs(&self, input: &AwsCredentials) -> Result<String> {
+    async fn do_compare_costs(&self, input: &AwsTarget) -> Result<String> {
         let creds = self.aws_creds(input).await?;
         let comparison = ce::compare_costs(&self.http, &creds).await?;
         Ok(serde_json::to_string_pretty(&comparison)?)
@@ -635,7 +741,7 @@ impl CloudTools {
 
     async fn fetch_aws_costs(
         &self,
-        input: &AwsCredentials,
+        input: &AwsTarget,
         start_date: &str,
         end_date: &str,
     ) -> Result<String> {
@@ -689,17 +795,12 @@ impl CloudTools {
         }
     }
 
-    async fn fetch_gcp_inventory(&self, input: &GcpCredentials) -> Result<String> {
+    async fn fetch_gcp_inventory(&self, input: &GcpTarget) -> Result<String> {
         let mut projects_data = Vec::new();
 
         for project_id in &input.project_ids {
             let mut failures: Vec<serde_json::Value> = Vec::new();
-            let creds = Self::gcp_creds(
-                project_id,
-                input.service_account_json.as_deref(),
-                None,
-                None,
-            )?;
+            let creds = Self::gcp_creds(project_id, None, None, None)?;
             let token = crate::clouds::gcp::auth::access_token(&self.http, &creds).await?;
 
             // Fetch all resource types in parallel — split into nested joins
@@ -1061,7 +1162,7 @@ impl CloudTools {
         Ok(serde_json::to_string_pretty(&projects_data)?)
     }
 
-    async fn do_find_gcp_waste(&self, input: &GcpCredentials) -> Result<String> {
+    async fn do_find_gcp_waste(&self, input: &GcpTarget) -> Result<String> {
         let mut all_findings = Vec::new();
         // Which API calls could not be made. "0 findings" with an empty errors
         // list means nothing is wasted; "0 findings" with entries here means
@@ -1069,12 +1170,7 @@ impl CloudTools {
         let mut failures: Vec<serde_json::Value> = Vec::new();
 
         for project_id in &input.project_ids {
-            let creds = Self::gcp_creds(
-                project_id,
-                input.service_account_json.as_deref(),
-                None,
-                None,
-            )?;
+            let creds = Self::gcp_creds(project_id, None, None, None)?;
             match gcp_waste::analyse_reporting(&self.http, &creds).await {
                 Ok((mut findings, mut project_failures)) => {
                     for f in &mut project_failures {
@@ -1129,16 +1225,11 @@ impl CloudTools {
         Ok(serde_json::to_string_pretty(&output)?)
     }
 
-    async fn fetch_gcp_recommendations(&self, input: &GcpCredentials) -> Result<String> {
+    async fn fetch_gcp_recommendations(&self, input: &GcpTarget) -> Result<String> {
         let mut all_recs = Vec::new();
 
         for project_id in &input.project_ids {
-            let creds = Self::gcp_creds(
-                project_id,
-                input.service_account_json.as_deref(),
-                None,
-                None,
-            )?;
+            let creds = Self::gcp_creds(project_id, None, None, None)?;
             match recommender::get_recommendations(&self.http, &creds).await {
                 Ok(recs) => {
                     for rec in recs {
@@ -1180,16 +1271,16 @@ impl CloudTools {
 // ── OVH implementation ──────────────────────────────────────────────────────
 
 impl CloudTools {
-    fn ovh_creds(input: &OvhCredentials) -> OvhCreds {
+    fn ovh_creds(input: &OvhTarget) -> OvhCreds {
         OvhCreds {
             app_key: input.app_key.clone(),
             app_secret: input.app_secret.clone(),
             consumer_key: input.consumer_key.clone(),
-            endpoint: input.endpoint.clone().unwrap_or_else(|| "ovh-eu".into()),
+            endpoint: input.endpoint.clone(),
         }
     }
 
-    async fn fetch_ovh_costs(&self, input: &OvhCredentials) -> Result<String> {
+    async fn fetch_ovh_costs(&self, input: &OvhTarget) -> Result<String> {
         let creds = Self::ovh_creds(input);
         let costs = ovh_billing::get_costs(&self.http, &creds).await?;
         let total: f64 = costs.iter().map(|c| c.amount_usd).sum();
@@ -1205,7 +1296,7 @@ impl CloudTools {
         Ok(serde_json::to_string_pretty(&output)?)
     }
 
-    async fn fetch_ovh_inventory(&self, input: &OvhCredentials) -> Result<String> {
+    async fn fetch_ovh_inventory(&self, input: &OvhTarget) -> Result<String> {
         let creds = Self::ovh_creds(input);
         let mut failures: Vec<serde_json::Value> = Vec::new();
         let (instances_res, services_res) = tokio::join!(
@@ -1256,14 +1347,14 @@ impl CloudTools {
 // ── Cloudflare implementation ───────────────────────────────────────────────
 
 impl CloudTools {
-    fn cf_creds(input: &CloudflareCredentials) -> CloudflareCreds {
+    fn cf_creds(input: &CloudflareTarget) -> CloudflareCreds {
         CloudflareCreds {
             api_token: input.api_token.clone(),
             account_id: input.account_id.clone(),
         }
     }
 
-    async fn fetch_cf_costs(&self, input: &CloudflareCredentials) -> Result<String> {
+    async fn fetch_cf_costs(&self, input: &CloudflareTarget) -> Result<String> {
         let creds = Self::cf_creds(input);
         let (costs_res, zones_res) = tokio::join!(
             cf_billing::get_costs(&self.http, &creds),
@@ -1292,7 +1383,7 @@ impl CloudTools {
         Ok(serde_json::to_string_pretty(&output)?)
     }
 
-    async fn fetch_cf_inventory(&self, input: &CloudflareCredentials) -> Result<String> {
+    async fn fetch_cf_inventory(&self, input: &CloudflareTarget) -> Result<String> {
         let creds = Self::cf_creds(input);
         let (zones_res, dns_res, certs_res, workers_res) = tokio::join!(
             cf_zones::list_zones(&self.http, &creds),
@@ -1370,7 +1461,7 @@ impl CloudTools {
 // ── Cross-cloud summary implementation ──────────────────────────────────────
 
 impl CloudTools {
-    async fn fetch_cross_cloud_summary(&self, input: &Credentials) -> Result<String> {
+    async fn fetch_cross_cloud_summary(&self, input: &Target) -> Result<String> {
         let mut providers = Vec::new();
 
         // ── AWS ──
@@ -1379,7 +1470,11 @@ impl CloudTools {
         // that may need a role assumed and the old input carried no AWS fields at
         // all. A "cross-cloud" total that silently omits the largest bill is
         // worse than no total.
-        if let Some(ref aws) = input.aws {
+        // AWS is always attempted: its credential chain always has somewhere to
+        // look, and if nothing answers, the entry below records that rather than
+        // omitting the provider silently.
+        {
+            let aws = &input.aws();
             let entry = match self.aws_creds(aws).await {
                 Ok(creds) => match crate::analyzers::waste::analyse(&self.http, &creds).await {
                     Ok(findings) => {
@@ -1398,7 +1493,7 @@ impl CloudTools {
         }
 
         // ── GCP ──
-        if let Some(ref gcp) = input.gcp {
+        if let Ok(ref gcp) = input.gcp() {
             let project_ids = &gcp.project_ids;
             if !project_ids.is_empty() {
                 let waste_json = self
@@ -1444,7 +1539,7 @@ impl CloudTools {
         }
 
         // ── OVH ──
-        if let Some(ref ovh) = input.ovh {
+        if let Ok(ref ovh) = input.ovh() {
             let creds = Self::ovh_creds(ovh);
             let costs = ovh_billing::get_costs(&self.http, &creds)
                 .await
@@ -1464,7 +1559,7 @@ impl CloudTools {
         }
 
         // ── Cloudflare ──
-        if let Some(ref cf) = input.cloudflare {
+        if let Ok(ref cf) = input.cloudflare() {
             let creds = Self::cf_creds(cf);
             let (costs_res, zones_res) = tokio::join!(
                 cf_billing::get_costs(&self.http, &creds),
@@ -1593,8 +1688,8 @@ fn gke_node_monthly_estimate(machine_type: &str) -> f64 {
 mod tests {
     use super::*;
 
-    fn creds(json: &str) -> Credentials {
-        serde_json::from_str(json).expect("credentials should parse")
+    fn target(json: &str) -> Target {
+        serde_json::from_str(json).expect("target should parse")
     }
 
     /// The cloud selector is an enum, so a typo is rejected by the schema rather
@@ -1625,37 +1720,65 @@ mod tests {
         );
     }
 
-    /// Every accessor says which field is missing and what belongs in it.
+    /// The whole point of the selector/secret split: a tool call carries no
+    /// credentials, so an empty object is a complete, valid input.
     #[test]
-    fn missing_credentials_say_which_block_and_what_it_needs() {
-        let empty = creds("{}");
-        for (result, expect) in [
-            (empty.gcp().err(), "project_ids"),
-            (empty.cloudflare().err(), "api_token"),
-            (empty.ovh().err(), "app_key"),
-        ] {
-            let msg = result
-                .expect("absent credentials must be an error")
-                .to_string();
-            assert!(msg.contains(expect), "{msg:?} should mention {expect}");
-        }
+    fn an_empty_target_is_valid_and_carries_no_secret() {
+        let t = target("{}");
+        assert!(t.role_arn.is_none());
+        assert!(t.external_id.is_none());
+        assert!(t.project_ids.is_none());
+
+        // And the tool inputs default it, so `{"cloud":"aws"}` is a whole call.
+        let input: CloudInput =
+            serde_json::from_str(r#"{"cloud":"aws"}"#).expect("cloud alone is enough");
+        assert!(input.target.role_arn.is_none());
     }
 
-    /// role_arn is optional: an empty AWS block is valid and means "use the
-    /// credentials this machine already has". Requiring it blocked every user
-    /// running the server against their own account.
+    /// Selectors are not secrets, so they may still be passed — that is how one
+    /// agent scans several AWS accounts or several GCP projects.
     #[test]
-    fn aws_block_may_be_empty_and_role_arn_is_optional() {
-        let c = creds(r#"{"aws":{}}"#);
-        let aws = c.aws().expect("an empty aws block is credentials enough");
-        assert!(aws.role_arn.is_none());
-        assert!(aws.external_id.is_none());
-
-        let assumed = creds(r#"{"aws":{"role_arn":"arn:aws:iam::000000000000:role/Example"}}"#);
+    fn selectors_are_still_accepted_for_multi_account_use() {
+        let t = target(r#"{"role_arn":"arn:aws:iam::000000000000:role/Example","external_id":"x"}"#);
+        let aws = t.aws();
         assert_eq!(
-            assumed.aws().unwrap().role_arn.as_deref(),
+            aws.role_arn.as_deref(),
             Some("arn:aws:iam::000000000000:role/Example")
         );
+        assert_eq!(aws.external_id.as_deref(), Some("x"));
+
+        let t = target(r#"{"project_ids":["a","b","c"]}"#);
+        assert_eq!(t.gcp().unwrap().project_ids, vec!["a", "b", "c"]);
+    }
+
+    /// A cloud with nothing configured must name the variable to set. "Not
+    /// configured" sends the caller reading source.
+    #[test]
+    fn missing_configuration_names_the_variable() {
+        let t = Target::default();
+        for (result, expect) in [
+            (t.cloudflare().err(), "CLOUDFLARE_API_TOKEN"),
+            (t.ovh().err(), "OVH_APPLICATION_KEY"),
+        ] {
+            let msg = result.expect("absent configuration must be an error").to_string();
+            assert!(msg.contains(expect), "{msg:?} should name {expect}");
+        }
+        // GCP names both ways of supplying a project.
+        let msg = t.gcp().err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(msg.contains("project_ids") && msg.contains("CLOUD_TOOLS_GCP_PROJECTS"));
+    }
+
+    /// An empty or whitespace-only variable is not configuration. Treating it as
+    /// set is how a blank value in a compose file becomes a confusing 401.
+    #[test]
+    fn blank_environment_values_do_not_count_as_set() {
+        let key = "CLOUD_TOOLS_TEST_BLANK_VALUE";
+        std::env::set_var(key, "   ");
+        assert!(env(key).is_none());
+        std::env::set_var(key, "real");
+        assert_eq!(env(key).as_deref(), Some("real"));
+        std::env::remove_var(key);
+        assert!(env(key).is_none());
     }
 
     /// Errors are serialised, not interpolated. The old code built the JSON with
@@ -1663,7 +1786,7 @@ mod tests {
     /// and AWS answers with XML.
     #[test]
     fn error_payloads_survive_quotes_in_the_message() {
-        let xml = r#"<Error><Code>Invalid</Code><Message xmlns="x">no "token"</Message></Error>"#;
+        let xml = r#"<Error><Message xmlns="x">no "token"</Message></Error>"#;
         let rendered = answer(Err(anyhow::anyhow!("STS failed: {xml}")));
         let parsed: serde_json::Value =
             serde_json::from_str(&rendered).expect("the payload must be valid JSON");
@@ -1673,18 +1796,6 @@ mod tests {
     /// A successful result is passed through untouched, not re-wrapped.
     #[test]
     fn success_is_returned_verbatim() {
-        assert_eq!(
-            answer(Ok("{\"total_usd\":1.5}".into())),
-            "{\"total_usd\":1.5}"
-        );
-    }
-
-    /// GCP takes a list of projects, and cost reporting must not quietly answer
-    /// about one of them.
-    #[test]
-    fn gcp_credentials_keep_every_project() {
-        let c = creds(r#"{"gcp":{"project_ids":["a","b","c"]}}"#);
-        assert_eq!(c.gcp().unwrap().project_ids, vec!["a", "b", "c"]);
-        assert!(c.gcp().unwrap().billing_table.is_none());
+        assert_eq!(answer(Ok("{\"total_usd\":1.5}".into())), "{\"total_usd\":1.5}");
     }
 }
