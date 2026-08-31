@@ -138,10 +138,33 @@ jobs:
       #
       # SHA256SUMS is written LAST and uploaded with the binaries. release-npm.yml
       # and smithery.yml wait for it as the signal that the whole set is up.
-      - name: Collect and checksum
+      - uses: actions/checkout@v4
+        with:
+          path: src
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # The .mcpb bundle: what Anthropic's desktop-extension submission asks for,
+      # and what Claude Desktop installs with a double click. Built HERE rather
+      # than in smithery.yml, because a bundle that exists only inside a later
+      # workflow is not downloadable by anyone — and the submission form needs a
+      # URL. Built before the checksums so it is hashed with the binaries.
+      #
+      # The tool list is captured from the binary this release actually ships, so
+      # the bundle cannot advertise tools the release does not have.
+      - name: Bundle (.mcpb)
         run: |
           mkdir -p dist
           find staged -type f -exec cp {} dist/ \;
+          chmod +x dist/cloud-tools-x86_64-linux
+          node src/npm/capture-card.mjs --out card.json -- ./dist/cloud-tools-x86_64-linux
+          VERSION=$(node -p "require('./src/npm/package.json').version")
+          node src/npm/build-mcpb.mjs --card card.json --out "dist/cloud-tools-$VERSION.mcpb"
+
+      - name: Collect and checksum
+        run: |
           cd dist
           sha256sum cloud-tools-* > SHA256SUMS
           cat SHA256SUMS
