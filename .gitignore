@@ -22,3 +22,7 @@ application_default_credentials.json
 # the released binary, never committed.
 *.mcpb
 card.json
+
+# Internal planning notes. This repository is PUBLIC — infrastructure
+# hostnames, cluster layout and commercial plans do not belong in it.
+.local/
