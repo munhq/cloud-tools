@@ -4,7 +4,7 @@
 //! fetch routers per region, and extract the `nats[]` array from each router.
 //! Pricing: ~$5/mo per NAT gateway (excluding data processing charges).
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use reqwest::Client;
 
 use super::auth::{access_token, GcpCreds};
@@ -69,11 +69,16 @@ async fn list_routers_in_region(
     let resp = http.get(&url).bearer_auth(token).send().await?;
     let status = resp.status();
     if !status.is_success() {
-        // 403 = API not enabled, 404 = no routers
-        if status.as_u16() == 403 || status.as_u16() == 404 {
-            return Ok(Vec::new());
-        }
-        return Ok(Vec::new());
+        // Every failure used to return an empty list, so "the Compute API is
+        // disabled" and "this region has no routers" were the same answer. They
+        // are not. The caller records the failure per region and carries on, so
+        // reporting it costs no resilience.
+        let text = resp.text().await.unwrap_or_default();
+        return Err(anyhow!(
+            "Cloud NAT could not be read for project {project} region {region} (HTTP {status}): \
+             enable compute.googleapis.com and check the credentials have permission. Response: {}",
+            text.chars().take(200).collect::<String>()
+        ));
     }
 
     let data: serde_json::Value = resp.json().await?;

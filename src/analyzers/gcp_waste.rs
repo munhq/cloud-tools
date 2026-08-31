@@ -81,7 +81,36 @@ fn pd_monthly_per_gb(disk_type: &str) -> f64 {
 // ── Public API ───────────────────────────────────────────────────────────────
 
 /// Run full waste analysis for a GCP project.
+/// Take the value, or record why there is none.
+///
+/// Every one of the twelve API calls below ended in `.unwrap_or_default()`, so a
+/// disabled API or a missing permission produced an empty list and the analyser
+/// reported "0 findings, $0 wasted". That is the most dangerous answer this tool
+/// can give: it reads as a clean bill of health when the truth is that nothing
+/// could be seen. Verified against a real project with the Compute, GKE, Cloud
+/// Run, Cloud Functions and Cloud IDS APIs disabled — it reported no waste.
+fn taken<T: Default>(what: &str, r: Result<T>, failures: &mut Vec<serde_json::Value>) -> T {
+    match r {
+        Ok(v) => v,
+        Err(e) => {
+            failures.push(serde_json::json!({ "resource": what, "error": e.to_string() }));
+            T::default()
+        }
+    }
+}
+
+/// Waste findings only. Callers that can report the failures should use
+/// [`analyse_reporting`] instead.
 pub async fn analyse(client: &reqwest::Client, creds: &GcpCreds) -> Result<Vec<WasteItem>> {
+    Ok(analyse_reporting(client, creds).await?.0)
+}
+
+/// Waste findings, and every API call that could not be made.
+pub async fn analyse_reporting(
+    client: &reqwest::Client,
+    creds: &GcpCreds,
+) -> Result<(Vec<WasteItem>, Vec<serde_json::Value>)> {
+    let mut failures: Vec<serde_json::Value> = Vec::new();
     let token = crate::clouds::gcp::auth::access_token(client, creds).await?;
 
     // Fetch all inventory in parallel (nested joins to avoid tuple size limits)
@@ -121,18 +150,22 @@ pub async fn analyse(client: &reqwest::Client, creds: &GcpCreds) -> Result<Vec<W
         },
     );
 
-    let disks = disks_res.unwrap_or_default();
-    let addresses = addresses_res.unwrap_or_default();
-    let snapshots = snapshots_res.unwrap_or_default();
-    let sql_instances = sql_res.unwrap_or_default();
-    let gke_clusters = gke_res.unwrap_or_default();
-    let functions = functions_res.unwrap_or_default();
-    let run_services = run_res.unwrap_or_default();
-    let buckets = buckets_res.unwrap_or_default();
-    let recommendations = recommender_res.unwrap_or_default();
-    let ids_endpoints = ids_res.unwrap_or_default();
-    let artifact_repos = artifact_res.unwrap_or_default();
-    let vpn_gateways = vpn_res.unwrap_or_default();
+    let disks = taken("compute.disks", disks_res, &mut failures);
+    let addresses = taken("compute.addresses", addresses_res, &mut failures);
+    let snapshots = taken("compute.snapshots", snapshots_res, &mut failures);
+    let sql_instances = taken("sqladmin.instances", sql_res, &mut failures);
+    let gke_clusters = taken("container.clusters", gke_res, &mut failures);
+    let functions = taken("cloudfunctions.functions", functions_res, &mut failures);
+    let run_services = taken("run.services", run_res, &mut failures);
+    let buckets = taken("storage.buckets", buckets_res, &mut failures);
+    let recommendations = taken(
+        "recommender.recommendations",
+        recommender_res,
+        &mut failures,
+    );
+    let ids_endpoints = taken("ids.endpoints", ids_res, &mut failures);
+    let artifact_repos = taken("artifactregistry.repositories", artifact_res, &mut failures);
+    let vpn_gateways = taken("compute.vpnGateways", vpn_res, &mut failures);
 
     let mut findings: Vec<WasteItem> = Vec::new();
 
@@ -700,7 +733,7 @@ pub async fn analyse(client: &reqwest::Client, creds: &GcpCreds) -> Result<Vec<W
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    Ok(findings)
+    Ok((findings, failures))
 }
 
 /// Run waste analysis across all projects accessible by the service account.

@@ -33,8 +33,26 @@ pub async fn list_services(http: &Client, creds: &GcpCreds) -> Result<Vec<CloudR
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await?;
+
+            // A 403 or a 404 is NOT an empty result, and returning one made this
+
+            // tool answer "nothing here" when the truth was "not allowed to look"
+
+            // or "no such project". A caller that scans several projects still
+
+            // survives this: the inventory records the failure against the
+
+            // resource and carries on with the rest.
+
             if status.as_u16() == 403 || status.as_u16() == 404 {
-                return Ok(Vec::new());
+                return Err(anyhow!(
+
+                    "Cloud Run could not be read for project {} (HTTP {}): enable run.googleapis.com \
+                     and check the credentials have permission. Response: {}",
+
+                    creds.project_id, status, text.chars().take(200).collect::<String>()
+
+                ));
             }
             return Err(anyhow!("Cloud Run API error {status}: {text}"));
         }
