@@ -275,6 +275,26 @@ impl CloudTools {
     }
 }
 
+/// Take the value, or record why there is none.
+///
+/// The GCP inventory called sixteen APIs and ended every one with
+/// `.unwrap_or_default()`. A disabled API, a missing permission, an exhausted
+/// quota and a project that does not exist all became an empty list, so the
+/// report was a confident row of zeros with no indication anything had failed.
+/// For a cost tool that is the worst possible failure: an agent reads "no
+/// resources, no waste" and tells someone their account is clean when the truth
+/// is that nothing could be seen. Verified against a project that does not
+/// exist — it returned a complete, error-free, all-zero inventory.
+fn taken<T: Default>(what: &str, r: Result<T>, failures: &mut Vec<serde_json::Value>) -> T {
+    match r {
+        Ok(v) => v,
+        Err(e) => {
+            failures.push(serde_json::json!({ "resource": what, "error": e.to_string() }));
+            T::default()
+        }
+    }
+}
+
 /// Render a tool result, so every tool reports failure the same way.
 ///
 /// The old code formatted the error straight into a JSON string with `format!`,
@@ -456,12 +476,24 @@ impl CloudTools {
         match input.cloud {
             Cloud::Aws => {
                 let creds = self.aws_creds(cr.aws()?).await?;
-                let findings = crate::analyzers::waste::analyse(&self.http, &creds).await?;
+                let (findings, failures) =
+                    crate::analyzers::waste::analyse_reporting(&self.http, &creds).await?;
                 let total: f64 = findings.iter().map(|f| f.estimated_monthly_usd).sum();
                 Ok(serde_json::to_string_pretty(&serde_json::json!({
                     "total_estimated_monthly_waste_usd": round2(total),
                     "finding_count": findings.len(),
                     "findings": findings,
+                    "errors": failures,
+                    "coverage": if failures.is_empty() {
+                        serde_json::json!("complete")
+                    } else {
+                        serde_json::json!(format!(
+                            "PARTIAL — {} API call(s) failed, so this is not a full picture. \
+                             A zero total does not mean nothing is wasted; it means part of the \
+                             account could not be read. See errors.",
+                            failures.len()
+                        ))
+                    },
                 }))?)
             }
             Cloud::Gcp => self.do_find_gcp_waste(cr.gcp()?).await,
@@ -612,6 +644,7 @@ impl CloudTools {
         let mut projects_data = Vec::new();
 
         for project_id in &input.project_ids {
+            let mut failures: Vec<serde_json::Value> = Vec::new();
             let creds = Self::gcp_creds(
                 project_id,
                 input.service_account_json.as_deref(),
@@ -665,8 +698,7 @@ impl CloudTools {
                 },
             );
 
-            let instances: Vec<_> = instances_res
-                .unwrap_or_default()
+            let instances: Vec<_> = taken("compute.instances", instances_res, &mut failures)
                 .into_iter()
                 .filter(|r| r.resource_type == "gce_instance")
                 .map(|r| {
@@ -690,8 +722,7 @@ impl CloudTools {
                 })
                 .collect();
 
-            let disks: Vec<_> = disks_res
-                .unwrap_or_default()
+            let disks: Vec<_> = taken("compute.disks", disks_res, &mut failures)
                 .into_iter()
                 .map(|d| {
                     serde_json::json!({
@@ -705,8 +736,7 @@ impl CloudTools {
                 })
                 .collect();
 
-            let addresses: Vec<_> = addresses_res
-                .unwrap_or_default()
+            let addresses: Vec<_> = taken("compute.addresses", addresses_res, &mut failures)
                 .into_iter()
                 .map(|a| {
                     serde_json::json!({
@@ -719,8 +749,7 @@ impl CloudTools {
                 })
                 .collect();
 
-            let snapshots: Vec<_> = snapshots_res
-                .unwrap_or_default()
+            let snapshots: Vec<_> = taken("compute.snapshots", snapshots_res, &mut failures)
                 .into_iter()
                 .map(|s| {
                     serde_json::json!({
@@ -734,22 +763,22 @@ impl CloudTools {
                 })
                 .collect();
 
-            let forwarding_rules: Vec<_> = fwd_rules_res
-                .unwrap_or_default()
-                .into_iter()
-                .map(|fr| {
-                    serde_json::json!({
-                        "name": fr.name,
-                        "region": fr.region,
-                        "ip_address": fr.ip_address,
-                        "target": fr.target,
-                        "load_balancing_scheme": fr.load_balancing_scheme,
+            let forwarding_rules: Vec<_> =
+                taken("compute.forwardingRules", fwd_rules_res, &mut failures)
+                    .into_iter()
+                    .map(|fr| {
+                        serde_json::json!({
+                            "name": fr.name,
+                            "region": fr.region,
+                            "ip_address": fr.ip_address,
+                            "target": fr.target,
+                            "load_balancing_scheme": fr.load_balancing_scheme,
+                        })
                     })
-                })
-                .collect();
+                    .collect();
 
             // GKE clusters with pricing
-            let gke_clusters_raw = clusters_res.unwrap_or_default();
+            let gke_clusters_raw = taken("container.clusters", clusters_res, &mut failures);
             let total_gke_clusters = gke_clusters_raw.len();
             let total_gke_nodes: u32 = gke_clusters_raw.iter().map(|c| c.node_count).sum();
             let clusters: Vec<_> = gke_clusters_raw
@@ -779,8 +808,7 @@ impl CloudTools {
                 })
                 .collect();
 
-            let sql_instances: Vec<_> = sql_res
-                .unwrap_or_default()
+            let sql_instances: Vec<_> = taken("sqladmin.instances", sql_res, &mut failures)
                 .into_iter()
                 .map(|s| {
                     serde_json::json!({
@@ -795,8 +823,7 @@ impl CloudTools {
                 })
                 .collect();
 
-            let functions: Vec<_> = functions_res
-                .unwrap_or_default()
+            let functions: Vec<_> = taken("cloudfunctions.functions", functions_res, &mut failures)
                 .into_iter()
                 .map(|f| {
                     serde_json::json!({
@@ -809,8 +836,7 @@ impl CloudTools {
                 })
                 .collect();
 
-            let run_services: Vec<_> = run_res
-                .unwrap_or_default()
+            let run_services: Vec<_> = taken("run.services", run_res, &mut failures)
                 .into_iter()
                 .map(|r| {
                     serde_json::json!({
@@ -822,8 +848,7 @@ impl CloudTools {
                 })
                 .collect();
 
-            let buckets: Vec<_> = buckets_res
-                .unwrap_or_default()
+            let buckets: Vec<_> = taken("storage.buckets", buckets_res, &mut failures)
                 .into_iter()
                 .map(|b| {
                     serde_json::json!({
@@ -837,8 +862,7 @@ impl CloudTools {
                 .collect();
 
             // New resource types
-            let cloud_nat: Vec<_> = nat_res
-                .unwrap_or_default()
+            let cloud_nat: Vec<_> = taken("compute.routers(nat)", nat_res, &mut failures)
                 .into_iter()
                 .map(|n| {
                     serde_json::json!({
@@ -851,8 +875,7 @@ impl CloudTools {
                 })
                 .collect();
 
-            let cloud_ids: Vec<_> = ids_res
-                .unwrap_or_default()
+            let cloud_ids: Vec<_> = taken("ids.endpoints", ids_res, &mut failures)
                 .into_iter()
                 .map(|e| {
                     serde_json::json!({
@@ -865,24 +888,23 @@ impl CloudTools {
                 })
                 .collect();
 
-            let artifact_registry: Vec<_> = artifact_res
-                .unwrap_or_default()
-                .into_iter()
-                .map(|r| {
-                    let estimated_usd = r.size_bytes as f64 / 1e9 * 0.10;
-                    serde_json::json!({
-                        "name": r.name,
-                        "format": r.format,
-                        "location": r.location,
-                        "size_bytes": r.size_bytes,
-                        "cleanup_policy_count": r.cleanup_policy_count,
-                        "estimated_monthly_usd": round2(estimated_usd),
+            let artifact_registry: Vec<_> =
+                taken("artifactregistry.repositories", artifact_res, &mut failures)
+                    .into_iter()
+                    .map(|r| {
+                        let estimated_usd = r.size_bytes as f64 / 1e9 * 0.10;
+                        serde_json::json!({
+                            "name": r.name,
+                            "format": r.format,
+                            "location": r.location,
+                            "size_bytes": r.size_bytes,
+                            "cleanup_policy_count": r.cleanup_policy_count,
+                            "estimated_monthly_usd": round2(estimated_usd),
+                        })
                     })
-                })
-                .collect();
+                    .collect();
 
-            let vpn_gateways: Vec<_> = vpn_res
-                .unwrap_or_default()
+            let vpn_gateways: Vec<_> = taken("compute.vpnGateways", vpn_res, &mut failures)
                 .into_iter()
                 .map(|v| {
                     let tunnels: Vec<_> = v
@@ -906,8 +928,7 @@ impl CloudTools {
                 })
                 .collect();
 
-            let subnetworks: Vec<_> = subnets_res
-                .unwrap_or_default()
+            let subnetworks: Vec<_> = taken("compute.subnetworks", subnets_res, &mut failures)
                 .into_iter()
                 .filter(|s| s.flow_logs_enabled)
                 .map(|s| {
@@ -922,8 +943,7 @@ impl CloudTools {
                 })
                 .collect();
 
-            let psc_endpoints: Vec<_> = psc_res
-                .unwrap_or_default()
+            let psc_endpoints: Vec<_> = taken("compute.pscEndpoints", psc_res, &mut failures)
                 .into_iter()
                 .map(|p| {
                     serde_json::json!({
@@ -971,6 +991,21 @@ impl CloudTools {
                 "logging_bytes_30d": logging_bytes,
                 "logging_estimated_monthly_usd": logging_estimated_monthly_usd,
                 "summary": summary,
+                // Present even when empty, so a reader can tell "nothing there"
+                // apart from "nothing could be read". A project whose every call
+                // failed says so outright rather than reporting zeros.
+                "errors": failures,
+                "error": if failures.len() >= 17 {
+                    serde_json::json!(format!(
+                        "no part of project {project_id} could be read — every API call failed. \
+                         The counts below are not zero because the project is empty; they are \
+                         zero because nothing was readable. Check the project exists, that the \
+                         Compute, Storage and related APIs are enabled, and that the credentials \
+                         have permission."
+                    ))
+                } else {
+                    serde_json::Value::Null
+                },
             }));
         }
 
@@ -979,6 +1014,10 @@ impl CloudTools {
 
     async fn do_find_gcp_waste(&self, input: &GcpCredentials) -> Result<String> {
         let mut all_findings = Vec::new();
+        // Which API calls could not be made. "0 findings" with an empty errors
+        // list means nothing is wasted; "0 findings" with entries here means
+        // nothing could be read, and the two must not look alike.
+        let mut failures: Vec<serde_json::Value> = Vec::new();
 
         for project_id in &input.project_ids {
             let creds = Self::gcp_creds(
@@ -987,8 +1026,12 @@ impl CloudTools {
                 None,
                 None,
             )?;
-            match gcp_waste::analyse(&self.http, &creds).await {
-                Ok(mut findings) => {
+            match gcp_waste::analyse_reporting(&self.http, &creds).await {
+                Ok((mut findings, mut project_failures)) => {
+                    for f in &mut project_failures {
+                        f["project_id"] = serde_json::json!(project_id);
+                    }
+                    failures.append(&mut project_failures);
                     for f in &mut findings {
                         f.account_id = Some(project_id.clone());
                     }
@@ -1022,6 +1065,17 @@ impl CloudTools {
             "total_estimated_monthly_waste_usd": round2(total_waste),
             "finding_count": all_findings.len(),
             "findings": all_findings,
+            "errors": failures,
+            "coverage": if failures.is_empty() {
+                serde_json::json!("complete")
+            } else {
+                serde_json::json!(format!(
+                    "PARTIAL — {} API call(s) failed, so this is not a full picture. \
+                     A zero total does not mean nothing is wasted; it means part of the \
+                     account could not be read. See errors.",
+                    failures.len()
+                ))
+            },
         });
         Ok(serde_json::to_string_pretty(&output)?)
     }
@@ -1104,13 +1158,13 @@ impl CloudTools {
 
     async fn fetch_ovh_inventory(&self, input: &OvhCredentials) -> Result<String> {
         let creds = Self::ovh_creds(input);
+        let mut failures: Vec<serde_json::Value> = Vec::new();
         let (instances_res, services_res) = tokio::join!(
             ovh_instances::list_resources(&self.http, &creds),
             ovh_services::list_services(&self.http, &creds),
         );
 
-        let instances: Vec<_> = instances_res
-            .unwrap_or_default()
+        let instances: Vec<_> = taken("ovh.instances", instances_res, &mut failures)
             .into_iter()
             .map(|r| {
                 serde_json::json!({
@@ -1123,8 +1177,7 @@ impl CloudTools {
             })
             .collect();
 
-        let services: Vec<_> = services_res
-            .unwrap_or_default()
+        let services: Vec<_> = taken("ovh.services", services_res, &mut failures)
             .into_iter()
             .map(|s| {
                 serde_json::json!({
@@ -1143,6 +1196,9 @@ impl CloudTools {
             "provider": "ovh",
             "instances": instances,
             "services": services,
+            // Empty when both calls succeeded. A caller must be able to tell an
+            // account with nothing in it from one that could not be read.
+            "errors": failures,
         });
         Ok(serde_json::to_string_pretty(&output)?)
     }
@@ -1451,7 +1507,9 @@ impl ServerHandler for CloudTools {
 }
 
 fn round2(v: f64) -> f64 {
-    (v * 100.0).round() / 100.0
+    // + 0.0 turns -0.0 into 0.0: summing an empty findings list produced
+    // "total_estimated_monthly_waste_usd": -0.0, which reads as a defect.
+    (v * 100.0).round() / 100.0 + 0.0
 }
 
 fn gke_node_monthly_estimate(machine_type: &str) -> f64 {

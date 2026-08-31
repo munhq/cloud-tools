@@ -150,7 +150,35 @@ const STALE_SNAPSHOT_DAYS: i64 = 90;
 ///
 /// Fetches inventory and metrics in parallel across all regions,
 /// then applies detection rules and returns all findings.
+/// Take the value, or record why there is none.
+///
+/// All seventeen API calls below ended in `.unwrap_or_default()`, so a denied
+/// permission produced an empty list and the analyser reported "0 findings, $0
+/// wasted" — a clean bill of health for an account it could not read. The same
+/// bug was proven on the GCP side against a real project with several APIs
+/// disabled.
+fn taken<T: Default>(what: &str, r: Result<T>, failures: &mut Vec<serde_json::Value>) -> T {
+    match r {
+        Ok(v) => v,
+        Err(e) => {
+            failures.push(serde_json::json!({ "resource": what, "error": e.to_string() }));
+            T::default()
+        }
+    }
+}
+
+/// Waste findings only. Callers that can report the failures should use
+/// [`analyse_reporting`] instead.
 pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<WasteItem>> {
+    Ok(analyse_reporting(client, creds).await?.0)
+}
+
+/// Waste findings, and every API call that could not be made.
+pub async fn analyse_reporting(
+    client: &reqwest::Client,
+    creds: &AwsCreds,
+) -> Result<(Vec<WasteItem>, Vec<serde_json::Value>)> {
+    let mut failures: Vec<serde_json::Value> = Vec::new();
     // Fetch all inventory in parallel — core resources + new checks
     let (
         instances_res,
@@ -190,23 +218,23 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
         compute_optimizer::get_ec2_recommendations(client, creds),
     );
 
-    let instances = instances_res.unwrap_or_default();
-    let volumes = volumes_res.unwrap_or_default();
-    let eips = eips_res.unwrap_or_default();
-    let rds_instances = rds_res.unwrap_or_default();
-    let snapshots = snapshots_res.unwrap_or_default();
-    let amis = amis_res.unwrap_or_default();
-    let key_pairs = key_pairs_res.unwrap_or_default();
-    let reserved_instances = reserved_res.unwrap_or_default();
-    let load_balancers = lbs_res.unwrap_or_default();
-    let s3_buckets = s3_res.unwrap_or_default();
-    let log_groups = logs_res.unwrap_or_default();
-    let nat_gateways = nat_gateways_res.unwrap_or_default();
-    let lambda_functions = lambda_res.unwrap_or_default();
-    let dynamo_tables = dynamodb_res.unwrap_or_default();
-    let elasticache_clusters = elasticache_res.unwrap_or_default();
-    let ecs_services = ecs_res.unwrap_or_default();
-    let co_recommendations = co_res.unwrap_or_default();
+    let instances = taken("ec2.instances", instances_res, &mut failures);
+    let volumes = taken("ec2.volumes", volumes_res, &mut failures);
+    let eips = taken("ec2.addresses", eips_res, &mut failures);
+    let rds_instances = taken("rds.instances", rds_res, &mut failures);
+    let snapshots = taken("ec2.snapshots", snapshots_res, &mut failures);
+    let amis = taken("ec2.images", amis_res, &mut failures);
+    let key_pairs = taken("ec2.keyPairs", key_pairs_res, &mut failures);
+    let reserved_instances = taken("ec2.reservedInstances", reserved_res, &mut failures);
+    let load_balancers = taken("elb.loadBalancers", lbs_res, &mut failures);
+    let s3_buckets = taken("s3.buckets", s3_res, &mut failures);
+    let log_groups = taken("logs.logGroups", logs_res, &mut failures);
+    let nat_gateways = taken("ec2.natGateways", nat_gateways_res, &mut failures);
+    let lambda_functions = taken("lambda.functions", lambda_res, &mut failures);
+    let dynamo_tables = taken("dynamodb.tables", dynamodb_res, &mut failures);
+    let elasticache_clusters = taken("elasticache.clusters", elasticache_res, &mut failures);
+    let ecs_services = taken("ecs.services", ecs_res, &mut failures);
+    let co_recommendations = taken("computeOptimizer.recommendations", co_res, &mut failures);
 
     // ── Build per-region price cache ──────────────────────────────────────────
     //
@@ -1063,7 +1091,7 @@ pub async fn analyse(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<W
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    Ok(findings)
+    Ok((findings, failures))
 }
 
 fn analyse_volumes(volumes: &[EbsVolume]) -> Vec<WasteItem> {
