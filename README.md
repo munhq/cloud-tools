@@ -172,6 +172,41 @@ merely fewer rules, and `get_waste` says so rather than returning an empty list.
 AWS has no inventory tool yet, though the listing calls behind one already exist.
 Contributions adding provider coverage are welcome.
 
+## Privacy Policy
+
+cloud-tools collects nothing. There is no telemetry, no analytics and no
+phone-home of any kind — verified by the fact that the only hosts in the source
+are cloud provider APIs plus github.com, which the npm wrapper uses to download
+the binary for your platform.
+
+**What is collected.** Nothing. No account, no sign-up, no identifier.
+
+**What is processed, and where.** Credentials you pass are used to sign requests
+to your own cloud provider and are held in memory for the life of that call. The
+server runs on your machine, so nothing is sent to munhq or to any third party.
+The responses go back to the MCP client that asked for them and nowhere else.
+
+**Storage and retention.** Nothing is written to disk and nothing is retained.
+The one exception is the npm wrapper, which caches the downloaded binary under
+`~/.cache/cloud-tools/bin/` so it is not re-fetched on every run. That cache
+holds a program, never your data or your credentials.
+
+**Logging.** Diagnostics go to stderr, which your MCP client captures.
+Credentials are never logged. Error messages quote the provider's own response,
+which may name a project, an account id or a resource — the same information the
+tool was asked to report.
+
+**Third-party sharing.** None. The only network destinations are the cloud APIs
+of the providers whose credentials you supply:
+AWS (`*.amazonaws.com`), Google Cloud (`*.googleapis.com`), Cloudflare
+(`api.cloudflare.com`) and OVH (`*.api.ovh.com`, `api.us.ovhcloud.com`).
+
+**Permissions.** Read-only is sufficient for every tool. All seven declare
+`readOnlyHint: true`, and nothing in this server creates, modifies or deletes a
+cloud resource.
+
+**Contact.** hello@munhq.com — see also https://munhq.com/privacy.
+
 ## Licence
 
 Apache-2.0. See [LICENSE](LICENSE).
