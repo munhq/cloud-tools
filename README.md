@@ -205,7 +205,8 @@ AWS (`*.amazonaws.com`), Google Cloud (`*.googleapis.com`), Cloudflare
 `readOnlyHint: true`, and nothing in this server creates, modifies or deletes a
 cloud resource.
 
-**Contact.** hello@munhq.com — see also https://munhq.com/privacy.
+**Contact.** hello@munhq.com. The canonical version of this policy is at
+https://munhq.com/privacy/cloud-tools.
 
 ## Licence
 
