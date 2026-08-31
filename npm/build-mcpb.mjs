@@ -80,8 +80,8 @@ try {
     // is an immediate rejection rather than a review comment. manifest_version
     // 0.2+ takes an array of HTTPS URLs.
     privacy_policies: [
+      'https://munhq.com/privacy/cloud-tools',
       'https://github.com/munhq/cloud-tools#privacy-policy',
-      'https://munhq.com/privacy',
     ],
     // The bundle is what Claude Desktop installs, and its manifest is the only
     // place that install can get an icon from. Referenced by URL rather than
