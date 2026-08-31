@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "cloud-tools": {
+      "command": "npx",
+      "args": ["-y", "@munhq/cloud-tools"]
+    }
+  }
+}
