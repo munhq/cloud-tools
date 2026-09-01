@@ -2,6 +2,7 @@ pub mod auth;
 pub mod ce;
 pub mod cloudwatch;
 pub mod cloudwatch_logs;
+pub(crate) mod common;
 pub mod compute_optimizer;
 pub mod dynamodb;
 pub mod ec2;

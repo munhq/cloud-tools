@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use chrono::{Duration, Utc};
 
+use super::common::form_params;
 use super::{
     as_items,
     auth::{sign, AwsCreds},
@@ -258,13 +259,4 @@ fn summarise(resource_id: String, values: Vec<f64>) -> CpuStats {
         max_percent: (max * 100.0).round() / 100.0,
         sample_count: values.len(),
     }
-}
-
-fn form_params(params: &[(&str, &str)]) -> String {
-    let mut p = params.to_vec();
-    p.sort_by_key(|(k, _)| *k);
-    p.iter()
-        .map(|(k, v)| format!("{}={}", urlencoding::encode(k), urlencoding::encode(v)))
-        .collect::<Vec<_>>()
-        .join("&")
 }

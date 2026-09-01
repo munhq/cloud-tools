@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use futures::future::join_all;
 
+use super::common::form_params;
 use super::{
     as_items,
     auth::{sign, AwsCreds},
@@ -240,12 +241,3 @@ async fn elb_query(
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-
-fn form_params(params: &[(&str, &str)]) -> String {
-    let mut p = params.to_vec();
-    p.sort_by_key(|(k, _)| *k);
-    p.iter()
-        .map(|(k, v)| format!("{}={}", urlencoding::encode(k), urlencoding::encode(v)))
-        .collect::<Vec<_>>()
-        .join("&")
-}

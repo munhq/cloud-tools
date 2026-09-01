@@ -1739,7 +1739,8 @@ mod tests {
     /// agent scans several AWS accounts or several GCP projects.
     #[test]
     fn selectors_are_still_accepted_for_multi_account_use() {
-        let t = target(r#"{"role_arn":"arn:aws:iam::000000000000:role/Example","external_id":"x"}"#);
+        let t =
+            target(r#"{"role_arn":"arn:aws:iam::000000000000:role/Example","external_id":"x"}"#);
         let aws = t.aws();
         assert_eq!(
             aws.role_arn.as_deref(),
@@ -1760,7 +1761,9 @@ mod tests {
             (t.cloudflare().err(), "CLOUDFLARE_API_TOKEN"),
             (t.ovh().err(), "OVH_APPLICATION_KEY"),
         ] {
-            let msg = result.expect("absent configuration must be an error").to_string();
+            let msg = result
+                .expect("absent configuration must be an error")
+                .to_string();
             assert!(msg.contains(expect), "{msg:?} should name {expect}");
         }
         // GCP names both ways of supplying a project.
@@ -1796,6 +1799,9 @@ mod tests {
     /// A successful result is passed through untouched, not re-wrapped.
     #[test]
     fn success_is_returned_verbatim() {
-        assert_eq!(answer(Ok("{\"total_usd\":1.5}".into())), "{\"total_usd\":1.5}");
+        assert_eq!(
+            answer(Ok("{\"total_usd\":1.5}".into())),
+            "{\"total_usd\":1.5}"
+        );
     }
 }

@@ -9,6 +9,7 @@ use futures::future::join_all;
 use serde::Deserialize;
 
 use super::auth::{sign, AwsCreds};
+use super::common::list_regions;
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -71,40 +72,6 @@ async fn is_enrolled(client: &reqwest::Client, creds: &AwsCreds) -> bool {
 }
 
 // ── Region discovery ─────────────────────────────────────────────────────────
-
-async fn list_regions(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<String>> {
-    let body = form_params(&[("Action", "DescribeRegions"), ("Version", "2016-11-15")]);
-    let url = "https://ec2.us-east-1.amazonaws.com/";
-    let creds_for_region = AwsCreds {
-        region: "us-east-1".into(),
-        ..creds.clone()
-    };
-    let signed = sign(
-        &creds_for_region,
-        "POST",
-        url,
-        &[("content-type", "application/x-www-form-urlencoded")],
-        body.as_bytes(),
-        "ec2",
-    )?;
-    let mut req = client
-        .post(url)
-        .header("content-type", "application/x-www-form-urlencoded")
-        .header("x-amz-date", &signed.x_amz_date)
-        .header("x-amz-content-sha256", &signed.x_amz_content_sha256)
-        .header("authorization", &signed.authorization)
-        .body(body);
-    if let Some(t) = &signed.x_amz_security_token {
-        req = req.header("x-amz-security-token", t);
-    }
-    let resp = req.send().await?;
-    let xml = resp.text().await?;
-    let v = super::xml_to_value(&xml)?;
-    Ok(super::as_items(&v["regionInfo"]["item"])
-        .into_iter()
-        .filter_map(|r| r["regionName"].as_str().map(String::from))
-        .collect())
-}
 
 // ── Per-region recommendation fetch ──────────────────────────────────────────
 
@@ -276,12 +243,3 @@ struct MonthlySavings {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-
-fn form_params(params: &[(&str, &str)]) -> String {
-    let mut p = params.to_vec();
-    p.sort_by_key(|(k, _)| *k);
-    p.iter()
-        .map(|(k, v)| format!("{}={}", urlencoding::encode(k), urlencoding::encode(v)))
-        .collect::<Vec<_>>()
-        .join("&")
-}
