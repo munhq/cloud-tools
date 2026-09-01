@@ -8,6 +8,7 @@ use anyhow::Result;
 use reqwest::Client;
 
 use super::auth::{access_token, GcpCreds};
+use super::common::list_regions;
 
 #[derive(Debug, Clone)]
 pub struct CloudVpn {
@@ -259,20 +260,4 @@ fn parse_tunnel(tun: &serde_json::Value) -> (String, String, String, u32, String
         .unwrap_or("")
         .to_string();
     (name, status, peer_ip, ike_version, vpn_gateway, region)
-}
-
-async fn list_regions(http: &Client, token: &str, project: &str) -> Result<Vec<String>> {
-    let url = format!("https://compute.googleapis.com/compute/v1/projects/{project}/regions");
-    let resp = http.get(&url).bearer_auth(token).send().await?;
-    if !resp.status().is_success() {
-        return Ok(Vec::new());
-    }
-    let data: serde_json::Value = resp.json().await?;
-    Ok(data["items"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|r| r["name"].as_str().map(String::from))
-        .collect())
 }

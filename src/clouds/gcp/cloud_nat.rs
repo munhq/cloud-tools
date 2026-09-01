@@ -8,6 +8,7 @@ use anyhow::{anyhow, Result};
 use reqwest::Client;
 
 use super::auth::{access_token, GcpCreds};
+use super::common::list_regions;
 
 #[derive(Debug, Clone)]
 pub struct CloudNat {
@@ -39,22 +40,6 @@ pub async fn list_cloud_nats(http: &Client, creds: &GcpCreds) -> Result<Vec<Clou
         out.extend(result?);
     }
     Ok(out)
-}
-
-async fn list_regions(http: &Client, token: &str, project: &str) -> Result<Vec<String>> {
-    let url = format!("https://compute.googleapis.com/compute/v1/projects/{project}/regions");
-    let resp = http.get(&url).bearer_auth(token).send().await?;
-    if !resp.status().is_success() {
-        return Ok(Vec::new());
-    }
-    let data: serde_json::Value = resp.json().await?;
-    Ok(data["items"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|r| r["name"].as_str().map(String::from))
-        .collect())
 }
 
 async fn list_routers_in_region(

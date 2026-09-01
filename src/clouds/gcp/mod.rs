@@ -8,6 +8,7 @@ pub mod cloud_run;
 pub mod cloud_sql;
 pub mod cloud_vpn;
 pub mod commitments;
+pub(crate) mod common;
 pub mod compute;
 pub mod gke;
 pub mod monitoring;

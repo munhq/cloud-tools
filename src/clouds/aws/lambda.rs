@@ -2,10 +2,10 @@ use anyhow::{anyhow, Result};
 use futures::future::join_all;
 use serde::Deserialize;
 
+use super::common::list_regions;
 use super::{
-    as_items,
     auth::{sign, AwsCreds},
-    cloudwatch, xml_to_value,
+    cloudwatch,
 };
 
 // ── Public types ──────────────────────────────────────────────────────────────
@@ -46,36 +46,6 @@ pub async fn list_functions(
 }
 
 // ── Region discovery via EC2 DescribeRegions ──────────────────────────────────
-
-async fn list_regions(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<String>> {
-    let body = form_params(&[("Action", "DescribeRegions"), ("Version", "2016-11-15")]);
-    let url = "https://ec2.us-east-1.amazonaws.com/";
-    let signed = sign(
-        creds,
-        "POST",
-        url,
-        &[("content-type", "application/x-www-form-urlencoded")],
-        body.as_bytes(),
-        "ec2",
-    )?;
-    let mut req = client
-        .post(url)
-        .header("content-type", "application/x-www-form-urlencoded")
-        .header("x-amz-date", &signed.x_amz_date)
-        .header("x-amz-content-sha256", &signed.x_amz_content_sha256)
-        .header("authorization", &signed.authorization)
-        .body(body);
-    if let Some(t) = &signed.x_amz_security_token {
-        req = req.header("x-amz-security-token", t);
-    }
-    let resp = req.send().await?;
-    let xml = resp.text().await?;
-    let v = xml_to_value(&xml)?;
-    Ok(as_items(&v["regionInfo"]["item"])
-        .into_iter()
-        .filter_map(|r| r["regionName"].as_str().map(String::from))
-        .collect())
-}
 
 // ── Per-region function listing ───────────────────────────────────────────────
 
@@ -237,12 +207,3 @@ struct FunctionConfig {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-fn form_params(params: &[(&str, &str)]) -> String {
-    let mut p = params.to_vec();
-    p.sort_by_key(|(k, _)| *k);
-    p.iter()
-        .map(|(k, v)| format!("{}={}", urlencoding::encode(k), urlencoding::encode(v)))
-        .collect::<Vec<_>>()
-        .join("&")
-}

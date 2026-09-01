@@ -2,6 +2,7 @@ use anyhow::{anyhow, Result};
 use chrono::{Duration, Utc};
 use futures::future::join_all;
 
+use super::common::{ec2_query, form_params, list_regions};
 use super::{
     as_items,
     auth::{sign, AwsCreds},
@@ -45,16 +46,6 @@ pub async fn list_nat_gateways(
 }
 
 // ── Region discovery ──────────────────────────────────────────────────────────
-
-async fn list_regions(client: &reqwest::Client, creds: &AwsCreds) -> Result<Vec<String>> {
-    let body = form_params(&[("Action", "DescribeRegions"), ("Version", "2016-11-15")]);
-    let xml = ec2_query(client, creds, "us-east-1", &body).await?;
-    let v = xml_to_value(&xml)?;
-    Ok(as_items(&v["regionInfo"]["item"])
-        .into_iter()
-        .filter_map(|r| r["regionName"].as_str().map(String::from))
-        .collect())
-}
 
 // ── Per-region listing ────────────────────────────────────────────────────────
 
@@ -247,47 +238,6 @@ async fn cw_metric(
 
 // ── EC2 HTTP helper ───────────────────────────────────────────────────────────
 
-async fn ec2_query(
-    client: &reqwest::Client,
-    creds: &AwsCreds,
-    region: &str,
-    body: &str,
-) -> Result<String> {
-    let url = format!("https://ec2.{region}.amazonaws.com/");
-    let creds_for_region = AwsCreds {
-        region: region.to_string(),
-        ..creds.clone()
-    };
-
-    let signed = sign(
-        &creds_for_region,
-        "POST",
-        &url,
-        &[("content-type", "application/x-www-form-urlencoded")],
-        body.as_bytes(),
-        "ec2",
-    )?;
-
-    let mut req = client
-        .post(&url)
-        .header("content-type", "application/x-www-form-urlencoded")
-        .header("x-amz-date", &signed.x_amz_date)
-        .header("x-amz-content-sha256", &signed.x_amz_content_sha256)
-        .header("authorization", &signed.authorization)
-        .body(body.to_string());
-    if let Some(token) = &signed.x_amz_security_token {
-        req = req.header("x-amz-security-token", token);
-    }
-
-    let resp = req.send().await?;
-    let status = resp.status();
-    let text = resp.text().await?;
-    if !status.is_success() {
-        return Err(anyhow!("EC2 API error {status} in {region}: {text}"));
-    }
-    Ok(text)
-}
-
 // ── Misc helpers ──────────────────────────────────────────────────────────────
 
 fn tag_value(tag_set: &serde_json::Value, key: &str) -> Option<String> {
@@ -295,13 +245,4 @@ fn tag_value(tag_set: &serde_json::Value, key: &str) -> Option<String> {
         .iter()
         .find(|i| i["key"].as_str() == Some(key))
         .and_then(|i| i["value"].as_str().map(String::from))
-}
-
-fn form_params(params: &[(&str, &str)]) -> String {
-    let mut p = params.to_vec();
-    p.sort_by_key(|(k, _)| *k);
-    p.iter()
-        .map(|(k, v)| format!("{}={}", urlencoding::encode(k), urlencoding::encode(v)))
-        .collect::<Vec<_>>()
-        .join("&")
 }
