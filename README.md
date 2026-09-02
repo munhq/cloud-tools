@@ -1,5 +1,12 @@
 <img src="docs/brand/logo.svg" alt="cloud-tools" height="72">
 
+[![MCP Registry](https://img.shields.io/badge/MCP%20Registry-io.github.munhq%2Fcloud--tools-000)](https://registry.modelcontextprotocol.io/v0/servers?search=cloud-tools)
+[![Smithery](https://img.shields.io/badge/Smithery-munhq%2Fcloud--tools-7c3aed)](https://smithery.ai/servers/munhq/cloud-tools)
+[![Glama](https://img.shields.io/badge/Glama-munhq%2Fcloud--tools-4f46e5)](https://glama.ai/mcp/servers/munhq/cloud-tools)
+
+[![Install in Cursor](https://img.shields.io/badge/Install-Cursor-000?logo=cursor)](cursor://anysphere.cursor-deeplink/mcp/install?name=cloud-tools&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkBtdW5ocS9jbG91ZC10b29scyJdfQ==)
+[![Install in VS Code](https://img.shields.io/badge/Install-VS%20Code-007ACC?logo=visualstudiocode)](vscode:mcp/install?%7B%22name%22%3A%22cloud-tools%22%2C%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40munhq%2Fcloud-tools%22%5D%7D)
+
 Multi-cloud cost, inventory and waste analysis in Rust — exposed as an **MCP server** so an AI agent can query spend and waste directly, and as an **HTTP API** for everything else.
 
 It reports spend and waste: idle instances, oversized nodes, previous-generation hardware, unattached resources, and commitments you are not using.
