@@ -276,7 +276,7 @@ impl CloudTools {
     }
 
     #[tool(
-        description = "Cloud spend. AWS: by service over a date range, from Cost Explorer; pass group_by=\"data_transfer\" for transfer cost by usage type. GCP: by service from the BigQuery billing export, which credentials.gcp.billing_table must name — without it you get budget amounts, not spend. Cloudflare: subscriptions and zone plan costs. OVH: the 6 most recent invoices.",
+        description = "Cloud spend. AWS: by service over a date range, from Cost Explorer; pass group_by=\"data_transfer\" for transfer cost by usage type. GCP: by service from the BigQuery billing export, which CLOUD_TOOLS_GCP_BILLING_TABLE on the server must name — without it you get budget amounts, not spend. Cloudflare: subscriptions and zone plan costs. OVH: the 6 most recent invoices.",
         annotations(
             title = "Cloud spend",
             read_only_hint = true,
@@ -290,7 +290,7 @@ impl CloudTools {
     }
 
     #[tool(
-        description = "This period against the same day window of the previous month, so a partial month does not read as a fall. AWS and GCP only. GCP needs credentials.gcp.billing_table.",
+        description = "This period against the same day window of the previous month, so a partial month does not read as a fall. AWS and GCP only. GCP needs CLOUD_TOOLS_GCP_BILLING_TABLE set on the server.",
         annotations(
             title = "Spend, month over month",
             read_only_hint = true,
@@ -406,6 +406,67 @@ fn answer(result: Result<String>) -> String {
     }
 }
 
+/// A caller-supplied date pair, validated before it reaches any provider.
+///
+/// The strings used to travel straight to the cloud APIs, which answered an
+/// inverted or equal range with their own "invalid parameter" response after
+/// the request was already on its way. Naming both values here turns it into
+/// a message an agent can correct.
+fn checked_dates(start: &str, end: &str) -> Result<(NaiveDate, NaiveDate)> {
+    let start = NaiveDate::parse_from_str(start, "%Y-%m-%d")
+        .map_err(|_| anyhow::anyhow!("Invalid start_date, expected YYYY-MM-DD"))?;
+    let end = NaiveDate::parse_from_str(end, "%Y-%m-%d")
+        .map_err(|_| anyhow::anyhow!("Invalid end_date, expected YYYY-MM-DD"))?;
+    if start >= end {
+        anyhow::bail!("start_date must be before end_date (got {start} and {end})");
+    }
+    Ok((start, end))
+}
+
+/// Build the OVH row for the cross-cloud summary. Failed calls arrive as a
+/// failure list and are attached to the row; a token that 401s must not render
+/// as a clean zero bill.
+fn ovh_summary_entry(
+    costs: Vec<CostEntry>,
+    services: Vec<ovh_services::OvhService>,
+    failures: Vec<serde_json::Value>,
+) -> serde_json::Value {
+    let total: f64 = costs.iter().map(|c| c.amount_usd).sum();
+    let active = services.iter().filter(|s| s.status == "active").count();
+    let mut entry = serde_json::json!({
+        "provider": "ovh",
+        "total_billed_usd": round2(total),
+        "active_services": active,
+        "total_services": services.len(),
+    });
+    if !failures.is_empty() {
+        entry["errors"] = serde_json::json!(failures);
+    }
+    entry
+}
+
+/// Build the Cloudflare row for the cross-cloud summary, same contract as
+/// `ovh_summary_entry`: failures are reported, never zeroed.
+fn cloudflare_summary_entry(
+    costs: Vec<CostEntry>,
+    zones: Vec<cf_zones::CfZone>,
+    failures: Vec<serde_json::Value>,
+) -> serde_json::Value {
+    let sub_total: f64 = costs.iter().map(|c| c.amount_usd).sum();
+    let zone_total: f64 = zones.iter().map(|z| z.plan_price).sum();
+    let mut entry = serde_json::json!({
+        "provider": "cloudflare",
+        "subscription_total_usd": round2(sub_total),
+        "zone_plan_total_usd": round2(zone_total),
+        "total_usd": round2(sub_total + zone_total),
+        "zones": zones.len(),
+    });
+    if !failures.is_empty() {
+        entry["errors"] = serde_json::json!(failures);
+    }
+    entry
+}
+
 impl CloudTools {
     // ── Dispatch: one arm per cloud, or a sentence saying there is none ───────
 
@@ -508,12 +569,7 @@ impl CloudTools {
                 let aws = &t.aws();
                 match input.group_by.as_deref() {
                     Some("data_transfer") => {
-                        let s = NaiveDate::parse_from_str(&start, "%Y-%m-%d").map_err(|_| {
-                            anyhow::anyhow!("Invalid start_date, expected YYYY-MM-DD")
-                        })?;
-                        let e = NaiveDate::parse_from_str(&end, "%Y-%m-%d").map_err(|_| {
-                            anyhow::anyhow!("Invalid end_date, expected YYYY-MM-DD")
-                        })?;
+                        let (s, e) = checked_dates(&start, &end)?;
                         self.do_data_transfer(aws, s, e).await
                     }
                     Some("service") | None => self.fetch_aws_costs(aws, &start, &end).await,
@@ -543,10 +599,7 @@ impl CloudTools {
         if c.project_ids.is_empty() {
             anyhow::bail!("credentials.gcp.project_ids is empty");
         }
-        let start_d = NaiveDate::parse_from_str(start, "%Y-%m-%d")
-            .map_err(|_| anyhow::anyhow!("Invalid start_date, expected YYYY-MM-DD"))?;
-        let end_d = NaiveDate::parse_from_str(end, "%Y-%m-%d")
-            .map_err(|_| anyhow::anyhow!("Invalid end_date, expected YYYY-MM-DD"))?;
+        let (start_d, end_d) = checked_dates(start, end)?;
 
         let mut per_project = Vec::new();
         let mut grand_total = 0.0;
@@ -584,8 +637,8 @@ impl CloudTools {
             "source": if c.billing_table.is_some() { "bigquery_billing_export" } else { "budgets" },
             "note": if c.billing_table.is_some() { serde_json::Value::Null } else {
                 serde_json::json!("No billing_table was given, so these are BUDGET amounts from the \
-                                   Budgets API, not actual spend. Set credentials.gcp.billing_table \
-                                   to the BigQuery billing export table for real costs.")
+                                   Budgets API, not actual spend. Set CLOUD_TOOLS_GCP_BILLING_TABLE \
+                                   on the server to the BigQuery billing export table for real costs.")
             },
             "total_usd": round2(grand_total),
             "projects": per_project,
@@ -747,10 +800,7 @@ impl CloudTools {
     ) -> Result<String> {
         let creds = self.aws_creds(input).await?;
 
-        let start = NaiveDate::parse_from_str(start_date, "%Y-%m-%d")
-            .map_err(|_| anyhow::anyhow!("Invalid start_date, expected YYYY-MM-DD"))?;
-        let end = NaiveDate::parse_from_str(end_date, "%Y-%m-%d")
-            .map_err(|_| anyhow::anyhow!("Invalid end_date, expected YYYY-MM-DD"))?;
+        let (start, end) = checked_dates(start_date, end_date)?;
 
         let costs: Vec<CostEntry> = ce::get_costs(&self.http, &creds, start, end).await?;
         let total: f64 = costs.iter().map(|c| c.amount_usd).sum();
@@ -1529,33 +1579,34 @@ impl CloudTools {
                     })
                     .collect();
 
-                providers.push(serde_json::json!({
+                let mut gcp_entry = serde_json::json!({
                     "provider": "gcp",
                     "waste_total_monthly_usd": round2(waste_total),
                     "finding_count": finding_count,
                     "projects": project_summaries,
-                }));
+                });
+                if let Some(err) = waste.get("error") {
+                    gcp_entry["error"] = err.clone();
+                }
+                providers.push(gcp_entry);
             }
         }
 
         // ── OVH ──
         if let Ok(ref ovh) = input.ovh() {
             let creds = Self::ovh_creds(ovh);
-            let costs = ovh_billing::get_costs(&self.http, &creds)
-                .await
-                .unwrap_or_default();
-            let services = ovh_services::list_services(&self.http, &creds)
-                .await
-                .unwrap_or_default();
-            let total: f64 = costs.iter().map(|c| c.amount_usd).sum();
-            let active = services.iter().filter(|s| s.status == "active").count();
-
-            providers.push(serde_json::json!({
-                "provider": "ovh",
-                "total_billed_usd": round2(total),
-                "active_services": active,
-                "total_services": services.len(),
-            }));
+            let mut failures: Vec<serde_json::Value> = Vec::new();
+            let costs = taken(
+                "ovh.billing",
+                ovh_billing::get_costs(&self.http, &creds).await,
+                &mut failures,
+            );
+            let services = taken(
+                "ovh.services",
+                ovh_services::list_services(&self.http, &creds).await,
+                &mut failures,
+            );
+            providers.push(ovh_summary_entry(costs, services, failures));
         }
 
         // ── Cloudflare ──
@@ -1565,18 +1616,10 @@ impl CloudTools {
                 cf_billing::get_costs(&self.http, &creds),
                 cf_zones::list_zones(&self.http, &creds),
             );
-            let costs = costs_res.unwrap_or_default();
-            let zones = zones_res.unwrap_or_default();
-            let sub_total: f64 = costs.iter().map(|c| c.amount_usd).sum();
-            let zone_total: f64 = zones.iter().map(|z| z.plan_price).sum();
-
-            providers.push(serde_json::json!({
-                "provider": "cloudflare",
-                "subscription_total_usd": round2(sub_total),
-                "zone_plan_total_usd": round2(zone_total),
-                "total_usd": round2(sub_total + zone_total),
-                "zones": zones.len(),
-            }));
+            let mut failures: Vec<serde_json::Value> = Vec::new();
+            let costs = taken("cloudflare.billing", costs_res, &mut failures);
+            let zones = taken("cloudflare.zones", zones_res, &mut failures);
+            providers.push(cloudflare_summary_entry(costs, zones, failures));
         }
 
         // ── Totals ──
@@ -1618,12 +1661,29 @@ impl CloudTools {
                 "providers_included": providers.iter()
                     .filter_map(|p| p["provider"].as_str().map(String::from))
                     .collect::<Vec<_>>(),
+                "partial": providers.iter().any(|p| p.get("errors").is_some() || p.get("error").is_some()),
             },
             "providers": providers,
         });
         Ok(serde_json::to_string_pretty(&output)?)
     }
 }
+
+/// The guidance every MCP client receives at handshake. It describes the
+/// environment-based credential design the schemas implement; the old design
+/// asked the agent to pass credentials per call, and this text said so until
+/// the two disagreed. Kept as a constant so a test can hold it honest.
+const SERVER_INSTRUCTIONS: &str = "Multi-cloud cost, inventory and waste analysis for AWS, GCP, \
+    OVH and Cloudflare. Credentials come from the server's environment, never from tool \
+    arguments. Call check_access first: it contacts nothing and reports which clouds are \
+    configured and what is missing for the ones that are not. AWS: the server's credential \
+    chain, or scan another account by assuming its role with target.role_arn \
+    (CLOUD_TOOLS_AWS_ROLE_ARN sets a default). GCP: Application Default Credentials or \
+    GOOGLE_APPLICATION_CREDENTIALS; choose projects with target.project_ids or \
+    CLOUD_TOOLS_GCP_PROJECTS, and set CLOUD_TOOLS_GCP_BILLING_TABLE for real spend from the \
+    BigQuery billing export. Cloudflare: CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID. OVH: \
+    OVH_APPLICATION_KEY, OVH_APPLICATION_SECRET, OVH_CONSUMER_KEY, OVH_ENDPOINT. Every tool is \
+    read-only and takes only a cloud name plus optional target selectors.";
 
 #[tool_handler]
 impl ServerHandler for CloudTools {
@@ -1639,14 +1699,7 @@ impl ServerHandler for CloudTools {
                     .with_title("cloud-tools")
                     .with_website_url("https://github.com/munhq/cloud-tools"),
             )
-            .with_instructions(
-                "Multi-cloud cost, inventory, and waste analysis for AWS, GCP, OVH, and Cloudflare. \
-                 AWS: pass an IAM Role ARN per call. \
-                 GCP: uses Application Default Credentials by default, or pass service_account_json. \
-                 OVH: pass app_key, app_secret, consumer_key per call. \
-                 Cloudflare: pass api_token and account_id per call. \
-                 Cross-cloud summary: pass credentials for each provider you want included.",
-            )
+            .with_instructions(SERVER_INSTRUCTIONS)
     }
 }
 
@@ -1803,5 +1856,72 @@ mod tests {
             answer(Ok("{\"total_usd\":1.5}".into())),
             "{\"total_usd\":1.5}"
         );
+    }
+
+    /// Inverted, equal or malformed date ranges are rejected locally with a
+    /// message naming both values, instead of surfacing as the provider's own
+    /// "invalid parameter" after the request has travelled there.
+    #[test]
+    fn checked_dates_rejects_empty_and_inverted_ranges() {
+        let msg = checked_dates("2024-03-01", "2024-02-01")
+            .expect_err("inverted range must fail")
+            .to_string();
+        assert!(msg.contains("must be before"), "{msg}");
+        assert!(
+            msg.contains("2024-03-01") && msg.contains("2024-02-01"),
+            "{msg}"
+        );
+        assert!(checked_dates("2024-03-01", "2024-03-01").is_err());
+        assert!(checked_dates("2024-02-01", "not-a-date").is_err());
+
+        let (s, e) = checked_dates("2024-02-01", "2024-03-01").expect("valid range");
+        assert_eq!(s.to_string(), "2024-02-01");
+        assert_eq!(e.to_string(), "2024-03-01");
+    }
+
+    /// A failed provider call in the cross-cloud summary is attached to its
+    /// row as errors — never silently rendered as a zero bill.
+    #[test]
+    fn summary_rows_report_failures_instead_of_fabricating_zeros() {
+        let ok = ovh_summary_entry(vec![], vec![], vec![]);
+        assert_eq!(ok["total_billed_usd"], 0.0);
+        assert!(ok.get("errors").is_none());
+
+        let failed = ovh_summary_entry(
+            vec![],
+            vec![],
+            vec![serde_json::json!({ "resource": "ovh.billing", "error": "HTTP 401" })],
+        );
+        assert_eq!(failed["total_billed_usd"], 0.0);
+        assert!(failed["errors"][0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("401"));
+
+        let cf = cloudflare_summary_entry(
+            vec![],
+            vec![],
+            vec![serde_json::json!({
+                "resource": "cloudflare.zones", "error": "quota exceeded"
+            })],
+        );
+        assert!(cf["errors"][0]["error"].as_str().unwrap().contains("quota"));
+    }
+
+    /// The instructions every client receives at handshake describe the
+    /// environment-based credential design — not the removed per-call
+    /// credentials the old schema carried.
+    #[test]
+    fn server_instructions_describe_the_environment_design() {
+        let text = SERVER_INSTRUCTIONS.to_lowercase();
+        assert!(
+            text.contains("check_access"),
+            "should point at check_access"
+        );
+        assert!(text.contains("environment"), "should name the environment");
+        assert!(text.contains("cloud_tools_gcp_billing_table"));
+        for removed in ["service_account_json", "app_key", "credentials object"] {
+            assert!(!text.contains(removed), "must not mention {removed}");
+        }
     }
 }
