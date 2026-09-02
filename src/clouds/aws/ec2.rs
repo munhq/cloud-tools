@@ -3,11 +3,7 @@ use chrono::{DateTime, Utc};
 use futures::future::join_all;
 
 use super::common::{ec2_query, form_params, list_regions};
-use super::{
-    as_items,
-    auth::AwsCreds,
-    az_to_region, xml_to_value,
-};
+use super::{as_items, auth::AwsCreds, az_to_region, xml_to_value};
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
