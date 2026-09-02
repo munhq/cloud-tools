@@ -36,7 +36,9 @@ pub async fn get_costs_range(
     end: NaiveDate,
 ) -> Result<Vec<CostEntry>> {
     let table = creds.billing_table.as_ref().ok_or_else(|| {
-        anyhow!("billing_table not configured — set CLOUD_GCP_BILLING_TABLE for real cost data")
+        anyhow!(
+            "billing_table not configured — set CLOUD_TOOLS_GCP_BILLING_TABLE for real cost data"
+        )
     })?;
     bigquery_costs(http, creds, table, start, end).await
 }
