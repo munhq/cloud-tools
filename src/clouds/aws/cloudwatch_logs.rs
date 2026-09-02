@@ -1,8 +1,8 @@
 use anyhow::{anyhow, Result};
 use futures::future::join_all;
 
-use super::common::list_regions;
 use super::auth::{sign, AwsCreds};
+use super::common::list_regions;
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
