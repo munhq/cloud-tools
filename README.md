@@ -181,7 +181,7 @@ cargo build --release
 ./target/release/cloud-tools            # MCP server on stdio
 ```
 
-As an MCP server it plugs into any MCP-capable agent. The agent calls the thirteen tools above directly and reasons over the results.
+As an MCP server it plugs into any MCP-capable agent. The agent calls the tools above directly and reasons over the results.
 
 To embed it instead, depend on the library and turn the binary features off:
 
@@ -226,7 +226,7 @@ of the providers whose credentials you supply:
 AWS (`*.amazonaws.com`), Google Cloud (`*.googleapis.com`), Cloudflare
 (`api.cloudflare.com`) and OVH (`*.api.ovh.com`, `api.us.ovhcloud.com`).
 
-**Permissions.** Read-only is sufficient for every tool. All seven declare
+**Permissions.** Read-only is sufficient for every tool. All eight declare
 `readOnlyHint: true`, and nothing in this server creates, modifies or deletes a
 cloud resource.
 
