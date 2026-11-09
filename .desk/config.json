@@ -30,5 +30,8 @@
         "reindeer.toml"
       ]
     }
+  ],
+  "preLand": [
+    "cargo fmt --check"
   ]
 }
