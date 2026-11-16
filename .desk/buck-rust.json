@@ -1,0 +1,6 @@
+{
+  "name": "cloud_tools",
+  "build_sha_env": "CLOUD_TOOLS_BUILD_SHA",
+  "issue": "munhq/desk#244",
+  "check_filegroup": true
+}

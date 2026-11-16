@@ -8,19 +8,36 @@
   },
   "validation": [
     {
+      "name": "root",
+      "command": "sh .desk/workflows/buck-base/scripts/buck-run.sh build //:check //:test-runs",
+      "timeoutMinutes": 30
+    },
+    {
+      "name": "lint",
+      "command": "sh .desk/workflows/buck-rust/scripts/clippy.sh",
+      "stage": "main",
+      "timeoutMinutes": 20
+    },
+    {
       "name": "format",
-      "command": "cargo fmt --check",
+      "command": "sh .desk/workflows/buck-rust/scripts/fmt.sh",
       "stage": "land",
-      "paths": [
-        "**/*.rs",
-        "Cargo.toml",
-        "Cargo.lock",
-        "rustfmt.toml",
-        ".rustfmt.toml"
-      ]
+      "timeoutMinutes": 10
     }
   ],
-  "preLand": [
-    "cargo fmt --check"
+  "preLand": [],
+  "checkouts": [
+    {
+      "repo": "munhq/desk",
+      "path": ".desk/workflows/buck-base",
+      "at": 615,
+      "subpath": "workflows/buck-base"
+    },
+    {
+      "repo": "munhq/desk",
+      "path": ".desk/workflows/buck-rust",
+      "at": 615,
+      "subpath": "workflows/buck-rust"
+    }
   ]
 }
